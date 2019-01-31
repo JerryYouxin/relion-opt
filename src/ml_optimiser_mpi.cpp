@@ -1378,6 +1378,9 @@ void MlOptimiserMpi::expectation()
 
 			}
 
+#ifdef PERF_DEBUG
+		std::cout << "--" << node->rank << " : " << "total=" << sampling.total << ", valid=" << sampling.valid << ", rate=" << (double)sampling.valid / (double)sampling.total << std::endl;
+#endif
 //		TODO: define MPI_COMM_SLAVES!!!!	MPI_Barrier(node->MPI_COMM_SLAVES);
 
 #ifdef CUDA

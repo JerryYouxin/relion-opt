@@ -239,6 +239,19 @@ public:
 			bool do_bimodal_search_psi = false,
     		RFLOAT sigma_cutoff = 3.);
 
+#ifdef CUDA
+    void selectOrientationsWithNonZeroPriorProbability_gpu(
+    		RFLOAT prior_rot, RFLOAT prior_tilt, RFLOAT prior_psi,
+    		RFLOAT sigma_rot, RFLOAT sigma_tilt, RFLOAT sigma_psi,
+    		std::vector<int> &pointer_dir_nonzeroprior, std::vector<RFLOAT> &directions_prior,
+    		std::vector<int> &pointer_psi_nonzeroprior, std::vector<RFLOAT> &psi_prior,
+            void* _alloctor,
+            bool could_print=false,
+			bool do_bimodal_search_psi = false,
+    		RFLOAT sigma_cutoff = 3.);
+    void printDebugInfo();
+#endif
+
     void selectOrientationsWithNonZeroPriorProbabilityFor3DHelicalReconstruction(
     		RFLOAT prior_rot, RFLOAT prior_tilt, RFLOAT prior_psi,
     		RFLOAT sigma_rot, RFLOAT sigma_tilt, RFLOAT sigma_psi,

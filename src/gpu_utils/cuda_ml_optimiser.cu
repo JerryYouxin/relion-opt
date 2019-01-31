@@ -141,9 +141,23 @@ void getFourierTransformsAndCtfs(long int my_ori_particle,
 			}
 			else
 			{
-				baseMLO->sampling.selectOrientationsWithNonZeroPriorProbability(prior_rot, prior_tilt, prior_psi,
-						sqrt(baseMLO->mymodel.sigma2_rot), sqrt(baseMLO->mymodel.sigma2_tilt), sqrt(baseMLO->mymodel.sigma2_psi),
-						op.pointer_dir_nonzeroprior, op.directions_prior, op.pointer_psi_nonzeroprior, op.psi_prior);
+#ifndef SELECT_USE_CPUONLY
+#define GPU_THRESHOLD 100
+				if(baseMLO->sampling.rot_angles.size()<GPU_THRESHOLD) {
+#endif
+					baseMLO->sampling.selectOrientationsWithNonZeroPriorProbability(prior_rot, prior_tilt, prior_psi,
+							sqrt(baseMLO->mymodel.sigma2_rot), sqrt(baseMLO->mymodel.sigma2_tilt), sqrt(baseMLO->mymodel.sigma2_psi),
+							op.pointer_dir_nonzeroprior, op.directions_prior, op.pointer_psi_nonzeroprior, op.psi_prior);
+#ifndef SELECT_USE_CPUONLY
+					}
+					else {
+						baseMLO->sampling.selectOrientationsWithNonZeroPriorProbability_gpu(prior_rot, prior_tilt, prior_psi,
+							sqrt(baseMLO->mymodel.sigma2_rot), sqrt(baseMLO->mymodel.sigma2_tilt), sqrt(baseMLO->mymodel.sigma2_psi),
+							op.pointer_dir_nonzeroprior, op.directions_prior, op.pointer_psi_nonzeroprior, op.psi_prior,
+							cudaMLO->devBundle->allocator,
+							false);
+					}
+#endif
 			}
 
 			long int nr_orients = baseMLO->sampling.NrDirections(0, &op.pointer_dir_nonzeroprior) * baseMLO->sampling.NrPsiSamplings(0, &op.pointer_psi_nonzeroprior);
