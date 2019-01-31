@@ -38,6 +38,9 @@ class HealpixSampling
 {
 
 public:
+#ifdef PERF_DEBUG
+    unsigned int total, valid;
+#endif
 	/** Healpix sampling object */
     Healpix_Base healpix_base;
 

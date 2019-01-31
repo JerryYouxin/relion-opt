@@ -27,6 +27,11 @@ int main(int argc, char **argv)
 	MlOptimiserMpi optimiser;
     try
     {
+#ifdef TIMING
+		Timer timer;
+		int stamp = timer.setNew("Total elapsed time");
+		timer.tic(stamp);
+#endif
     	// Read in parameters from the command line
     	optimiser.read(argc, argv);
 
@@ -45,6 +50,11 @@ int main(int argc, char **argv)
 			// Iterate
 			optimiser.iterate();
     	}
+#ifdef TIMING
+		timer.toc(stamp);
+		if(optimiser.node->rank==0)
+			timer.printTimes(1);
+#endif
 
     }
     catch (RelionError XE)

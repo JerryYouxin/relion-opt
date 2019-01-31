@@ -2842,6 +2842,7 @@ void MlOptimiserMpi::iterate()
 	TIMING_MPISLAVEWAIT1= timer.setNew("mpiSlaveWaiting1");
 	TIMING_MPISLAVEWAIT2= timer.setNew("mpiSlaveWaiting2");
 	TIMING_MPISLAVEWAIT3= timer.setNew("mpiSlaveWaiting3");
+	TIMING_EXP_SYMMRC = timer.setNew("symmetriseReconstructions");
 #endif
 
 
@@ -2922,7 +2923,13 @@ void MlOptimiserMpi::iterate()
 						std::cout << " Applying helical symmetry from the last iteration in real space..." << std::endl;
 				}
 			}
+#ifdef TIMING
+			timer.tic(TIMING_EXP_SYMMRC);
+#endif
 			symmetriseReconstructions();
+#ifdef TIMING
+			timer.toc(TIMING_EXP_SYMMRC);
+#endif
 
 			if ( (verb > 0) && (node->isMaster()) && (fn_local_symmetry_masks.size() >= 1) && (fn_local_symmetry_operators.size() >= 1) )
 				std::cout << " Applying local symmetry in real space according to " << fn_local_symmetry_operators.size() << " operators..." << std::endl;
