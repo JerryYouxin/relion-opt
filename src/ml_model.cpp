@@ -1060,8 +1060,15 @@ void MlWsumModel::initialise(MlModel &_model, FileName fn_sym, bool asymmetric_p
     wsum_reference_power_spectra.resize(nr_groups, aux);
 
     // Resize MlWsumModel-specific vectors
+#ifndef FORCE_USE_ORI_RECONS
+	node = _model.node;
+	do_parallel = _model.do_parallel;
+	BackProjectorMpi BP(node, ori_size, ref_dim, fn_sym, interpolator, padding_factor, r_min_nn,
+    		         ML_BLOB_ORDER, ML_BLOB_RADIUS, ML_BLOB_ALPHA, data_dim, _skip_gridding);
+#else
     BackProjector BP(ori_size, ref_dim, fn_sym, interpolator, padding_factor, r_min_nn,
     		         ML_BLOB_ORDER, ML_BLOB_RADIUS, ML_BLOB_ALPHA, data_dim, _skip_gridding);
+#endif
     BPref.clear();
     BPref.resize(nr_classes * nr_bodies, BP); // also set multiple bodies
     sumw_group.resize(nr_groups);

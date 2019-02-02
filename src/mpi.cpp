@@ -45,6 +45,69 @@
 
 #include "src/mpi.h"
 
+#ifndef FORCE_USE_ORI_RECONS
+#include <fftw3-mpi.h>
+#endif
+
+static int gcd(int a, int b) {
+    if(b==0) return a;
+    return gcd(b,a%b);
+}
+
+void MpiNode::groupInit(int tcn, int bgrp, bool do_split_random_halves)
+{
+    // Set up Class communicator -----------------------------------------
+    // cls_size * grp_size = size - 1 (Master will not do the calculation)
+    // Total Class Num = n * cls_size (n is how many iterations will be executed to cover all classes)
+    // Method : 1. split by user define (--bgrp x)
+    //          2. Automatically split : find all Maximum common divisor [gcd] of (size-1) and Total Class Num, and let it be cls_size.
+    if(bgrp > 0) {
+        grp_size = bgrp;
+        cls_size = (size-1) / bgrp;
+    }
+    else if(size-1>tcn) {
+        // core number is more than class number, use gcd method
+        cls_size = gcd(size-1,tcn);
+        grp_size = (size-1) / cls_size;
+    } else {
+        // class number is larger than nodes, so fully parallelized with classes
+        cls_size = size-1;
+        grp_size = 1;
+    }
+    if(slaveRank < 0) {
+        cls_rank = grp_rank = slaveRank;
+        rnd_rank = -1;
+    } else {
+        if(!do_split_random_halves) {
+            cls_rank = slaveRank / grp_size + 1; // this node only handle (n * cls_rank)-th class's data (n=1,...,tcn/cls_size)
+            MPI_Comm_split(slaveC, cls_rank, slaveRank, &groupC);
+            rnd_rank = randC = 0; // this will not use in this case
+        } else {
+            int rnd  = slaveRank % 2; // odd rank is one radom half and the even rank is the other random half
+            cls_rank = 2 * (slaveRank / (2 * grp_size)) + slaveRank%2 + 1; // this node only handle (n * cls_rank)-th class's data (n=1,...,tcn/cls_size)
+            rnd_rank = slaveRank / 2;
+            MPI_Comm_split(slaveC, rnd, slaveRank, &randC); // split to random halves
+            MPI_Comm_split(randC, cls_rank, rnd_rank, &groupC); // 
+        }
+        MPI_Comm_rank(groupC, &grp_rank);
+#ifdef DEBUG_GRP_MPI
+        int chk_grp_rank;
+        if(do_split_random_halves) {
+            chk_grp_rank = rnd_rank % grp_size;
+        } else {
+            chk_grp_rank = slaveRank % grp_size;
+        }
+        printf("groupC = %x, groupC_size=%d, rank = %d, size = %d, slaveRank = %d, cls_rank = %d, grp_rank = %d, grp_size = %d, cls_size = %d, tcn = %d, bgrp = %d, rnd_rank = %d\n",
+            groupC, chk_grp_rank, rank, size, slaveRank, cls_rank, grp_rank, grp_size, cls_size, tcn, bgrp, rnd_rank);
+        if(chk_grp_rank!=grp_rank) {
+            printf("Error: check %d != true %d\n",chk_grp_rank,grp_rank);
+            exit(-1);
+        }
+#endif
+    }
+    // -------------------------------------------------------------------
+}
+
 //------------ MPI ---------------------------
 MpiNode::MpiNode(int &argc, char ** argv)
 {
@@ -65,6 +128,10 @@ MpiNode::MpiNode(int &argc, char ** argv)
     else
     	slaveRank = -1;
     // -------------------------------------------------------------------
+    cls_size = size-1;
+    cls_rank = 0;
+    grp_size = 1;
+    grp_rank = 0;
 }
 
 MpiNode::~MpiNode()
@@ -179,6 +246,59 @@ int MpiNode::relion_MPI_Send(void *buf, std::ptrdiff_t count, MPI_Datatype datat
 #endif
         return result;
 
+}
+
+int MpiNode::relion_MPI_ISend(void *buf, std::ptrdiff_t count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm) {
+    int result(0);
+    RFLOAT start_time = MPI_Wtime();
+    MPI_Request request;
+
+    int unitsize(0);
+    MPI_Type_size(datatype, &unitsize);
+    const std::ptrdiff_t blocksize(512*1024*1024);
+    const std::ptrdiff_t totalsize(count*unitsize);
+    if (totalsize <= blocksize ) {
+        //result = MPI_Send(buf, count, datatype, dest, tag, comm);
+        result = MPI_Isend(buf, count, datatype, dest, tag, comm, &request);
+        if (result != MPI_SUCCESS) {
+            report_MPI_ERROR(result);
+        }
+        all_request.push_back(request);
+    } else {
+        char * const buffer(reinterpret_cast<char*>(buf));
+        const std::ptrdiff_t ntimes(totalsize/blocksize);
+        const std::ptrdiff_t nremain(totalsize%blocksize);
+        std::ptrdiff_t i(0);
+        for(; i<ntimes; ++i) {
+            // we don't care about the request is finish or not, so just get it and throw away
+            result = MPI_Isend(buffer+i*blocksize, blocksize, MPI_CHAR, dest, tag, comm, &request);
+            if (result != MPI_SUCCESS) {
+                report_MPI_ERROR(result);
+            }
+            all_request.push_back(request);
+        }
+        if(nremain>0) {
+            result = MPI_Isend(buffer+i*blocksize, nremain, MPI_CHAR, dest, tag, comm, &request);
+            if (result != MPI_SUCCESS) {
+                report_MPI_ERROR(result);
+            }
+            all_request.push_back(request);
+        }
+    }
+
+    return result;
+
+}
+
+int MpiNode::relion_MPI_WaitAll(MPI_Status &status) {
+    int result = MPI_SUCCESS;
+    for(int i=0;i<all_request.size();++i) {
+        result = MPI_Wait(&all_request[i], &status);
+        if (result != MPI_SUCCESS) {
+            report_MPI_ERROR(result);
+        }
+    }
+    return result;
 }
 
 int MpiNode::relion_MPI_Recv(void *buf, std::ptrdiff_t count, MPI_Datatype datatype, int source, int tag, MPI_Comm comm, MPI_Status &status) {
@@ -314,6 +434,47 @@ void printMpiNodesMachineNames(MpiNode &node, int nthreads)
     		std::cout.flush();
 		}
     	node.barrierWait();
+    }
+
+    if (node.isMaster())
+    {
+            std::cout << " -----------------" << std::endl;
+            //std::cout << "   Split into " << node.cls_size << " node classes, with " << node.grp_size << " in one class" << std::endl;
+#ifdef FORCE_USE_ORI_RECONS
+            std::cout << " WARNING : The binary is compiled with FORCE_USE_ORI_RECONS flag. The Group is then useless." << std::endl;
+#endif
+    }
+
+    for (int cls_i = 1; cls_i <= node.cls_size; cls_i++)
+    {
+        if (node.isMaster()) {
+            std::cout << " + Group ";
+            std::cout.width(5);
+            std::cout << cls_i;
+            std::cout << " : ";
+            std::cout.flush();
+        }
+        node.barrierWait();
+        for (int slave = 1; slave < node.size; slave++)
+        {
+            //if (node.cls_rank==cls_i && slave == (node.cls_rank-1)*node.grp_size + node.grp_rank + 1)
+            if(slave==node.rank && node.cls_rank==cls_i)
+            {
+                std::cout << " Slave ";
+                std::cout.width(5);
+                std::cout << slave;
+                std::cout << ", ";
+                std::cout.flush();
+            }
+            node.barrierWait();
+        }
+        std::cout.flush();
+        node.barrierWait();
+        if (node.isMaster()) {
+            std::cout << std::endl;
+            std::cout.flush();
+        }
+        node.barrierWait();
     }
 
     if (node.isMaster())

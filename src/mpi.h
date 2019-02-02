@@ -51,6 +51,7 @@
 #include <unistd.h>
 #include "src/error.h"
 #include "src/macros.h"
+#include <vector>
 
  /** Class to wrapp some MPI common calls in an work node.
  *
@@ -60,10 +61,21 @@ class MpiNode
 
 public:
     int rank, size;
-
+    // M-Step
+    bool isClassLeader;
+    MPI_Comm groupC;  // Exclude Master node (Master will not do the exact caculation)
+    MPI_Comm randC;  // Exclude Master node (Master will not do the exact caculation), each random half has different Comm
+    int rnd_rank; // rank inside a random half
+    int grp_rank, grp_size; // grp_size : how many processors will be parallelized to calculate a class
+    int cls_rank, cls_size; // cls_size : how many classes will be parallelized
+    // tcn : Total class number, bgrp : group size defined by user, if < 0, will automatically calculate group size
+    // this function will initialize grp/cls rank and comm accroding to tcn and bgrp
+    void groupInit(int tcn, int bgrp=0, bool do_split_random_halves=false); 
+    // E-Step
     MPI_Group worldG, slaveG; // groups of ranks (in practice only used to create communicators)
 	MPI_Comm worldC, slaveC;  // communicators
 	int slaveRank;			  // index of slave within the slave-group (and communicator)
+    std::vector<MPI_Request> all_request;
 
     MpiNode(int &argc, char ** argv);
 
@@ -85,9 +97,13 @@ public:
      */
     int relion_MPI_Send(void *buf, std::ptrdiff_t count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm);
 
+    int relion_MPI_ISend(void *buf, std::ptrdiff_t count, MPI_Datatype datatype, int dest, int tag, MPI_Comm comm);
+
     int relion_MPI_Recv(void *buf, std::ptrdiff_t count, MPI_Datatype datatype, int source, int tag, MPI_Comm comm, MPI_Status &status);
 
     int relion_MPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
+
+    int relion_MPI_WaitAll(MPI_Status &status);
 
     /* Better error handling of MPI error messages */
     void report_MPI_ERROR(int error_code);

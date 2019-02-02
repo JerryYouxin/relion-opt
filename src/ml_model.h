@@ -21,7 +21,11 @@
 #ifndef ML_MODEL_H_
 #define ML_MODEL_H_
 #include "src/projector.h"
+#ifndef FORCE_USE_ORI_RECONS
+#include "src/backprojector_mpi.h"
+#else
 #include "src/backprojector.h"
+#endif
 #include "src/metadata_table.h"
 #include "src/exp_model.h"
 #include "src/healpix_sampling.h"
@@ -33,6 +37,12 @@
 class MlModel
 {
 public:
+
+#ifndef FORCE_USE_ORI_RECONS
+	// node info from optimizer
+	MpiNode* node;
+	bool do_parallel;
+#endif
 
 	// Dimension of the references (2D or 3D)
 	int ref_dim;
@@ -196,6 +206,10 @@ public:
 
 	// Constructor
 	MlModel():
+#ifndef FORCE_USE_ORI_RECONS
+		node(0),
+		do_parallel(0),
+#endif
 		ref_dim(0),
 		data_dim(0),
 		ori_size(0),
@@ -243,6 +257,10 @@ public:
         if (this != &MD)
         {
             clear();
+#ifndef FORCE_USE_ORI_RECONS
+			node = MD.node;
+			do_parallel = MD.do_parallel;
+#endif
             ref_dim = MD.ref_dim;
     		data_dim = MD.data_dim;
     		ori_size = MD.ori_size;
@@ -339,6 +357,10 @@ public:
 		helical_twist.clear();
 		helical_rise.clear();
 		do_sgd=false;
+#ifndef FORCE_USE_ORI_RECONS
+		node = NULL;
+		do_parallel = false;
+#endif
 	}
 
 	// Initialise vectors with the right size
@@ -398,7 +420,11 @@ class MlWsumModel: public MlModel
 {
 public:
 	// One backprojector for CTF-corrected estimate of each class;
+#ifndef FORCE_USE_ORI_RECONS
+	std::vector<BackProjectorMpi> BPref;
+#else
 	std::vector<BackProjector > BPref;
+#endif
 
 	// Store the sum of the weights inside each group
 	// That is the number of particles inside each group

@@ -32,6 +32,10 @@
     	#define RCTOC(timer,label)
 #endif
 
+#ifndef FORCE_USE_ORI_RECONS
+#include <omp.h>
+#endif
+
 #include <sys/time.h>
 #include <stdio.h>
 #include <time.h>
@@ -662,6 +666,14 @@ void MlOptimiser::parseInitial(int argc, char **argv)
 	maximum_significants = textToInteger(parser.getOption("--maxsig", "", "0", true));
 	skip_gridding = parser.checkOption("--skip_gridding", "", "false", true);
 
+#ifndef FORCE_USE_ORI_RECONS
+	printf("-- set omp thread number to %d\n",nr_threads);
+	// turn off the dynamic determination of omp threads to 
+	// ensure the thread count is stick to nr_threads
+	omp_set_dynamic(0); 
+	omp_set_num_threads(nr_threads);
+#endif
+
 #ifdef DEBUG_READ
     std::cerr<<"MlOptimiser::parseInitial Done"<<std::endl;
 #endif
@@ -819,6 +831,15 @@ void MlOptimiser::read(FileName fn_in, int rank)
 #ifdef DEBUG_READ
     std::cerr<<"MlOptimiser::readStar before model."<<std::endl;
 #endif
+#ifndef FORCE_USE_ORI_RECONS
+	if (do_split_random_halves)
+	{
+		if (rank % 2 == 1)
+			mymodel.read(fn_model);
+		else
+			mymodel.read(fn_model2);
+	}
+#else
     if (do_split_random_halves)
 	{
 		if (rank % 2 == 1)
@@ -826,6 +847,7 @@ void MlOptimiser::read(FileName fn_in, int rank)
 		else
 			mymodel.read(fn_model2);
 	}
+#endif
 	else
 	{
 		mymodel.read(fn_model);

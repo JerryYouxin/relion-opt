@@ -56,6 +56,17 @@ void MlOptimiserMpi::read(int argc, char **argv)
     int mpi_section = parser.addSection("MPI options");
     only_do_unfinished_movies = parser.checkOption("--only_do_unfinished_movies", "When processing movies on a per-micrograph basis, ignore those movies for which the output STAR file already exists.");
 
+#ifndef FORCE_USE_ORI_RECONS
+	int bgrp = textToInteger(parser.getOption("--bgrp", "number of procs for single class reconstruction For Distributed reconstruct methods.", "0"));
+	int clsnum = mymodel.nr_classes;
+	if(do_split_random_halves) {
+		clsnum *= 2;
+	}
+	node->groupInit(clsnum,bgrp, do_split_random_halves);
+	mymodel.node = node;
+	mymodel.do_parallel = true;
+#endif
+
     // Don't put any output to screen for mpi slaves
     ori_verb = verb;
     if (verb != 0)
@@ -595,10 +606,17 @@ void MlOptimiserMpi::initialiseWorkLoad()
 	{
 		if (do_split_random_halves)
 		{
+#ifndef FORCE_USE_ORI_RECONS
+	    	int nr_slaves_halfset1 = (node->cls_size / 2)*node->grp_size;
+	    	int nr_slaves_halfset2 = nr_slaves_halfset1;
+	    	if ( node->cls_size % 2 != 0)
+	    		nr_slaves_halfset1 += node->grp_size;
+#else
 	    	int nr_slaves_halfset1 = (node->size - 1) / 2;
 	    	int nr_slaves_halfset2 = nr_slaves_halfset1;
 	    	if ( (node->size - 1) % 2 != 0)
 	    		nr_slaves_halfset1 += 1;
+#endif
 	    	if (node->myRandomSubset() == 1)
 	    	{
 	    		// Divide first half of the images
@@ -1914,7 +1932,15 @@ void MlOptimiserMpi::maximization()
 			if (wsum_model.pdf_class[iclass] > 0.)
 			{
 				// Parallelise: each MPI-node has a different reference
+#ifndef FORCE_USE_ORI_RECONS
 				int reconstruct_rank1;
+				if (do_split_random_halves)
+					reconstruct_rank1 = 2 * (ith_recons % ( node->cls_size/2 ) ) + 1;
+				else
+					reconstruct_rank1 = ith_recons % (node->cls_size) + 1;
+				if (node->cls_rank == reconstruct_rank1) 
+				{
+#else
 				if (do_split_random_halves)
 					reconstruct_rank1 = 2 * (ith_recons % ( (node->size - 1)/2 ) ) + 1;
 				else
@@ -1922,7 +1948,7 @@ void MlOptimiserMpi::maximization()
 
 				if (node->rank == reconstruct_rank1)
 				{
-
+#endif
 					if ((wsum_model.BPref[iclass].weight).sum() > XMIPP_EQUAL_ACCURACY)
 					{
 
@@ -1978,76 +2004,91 @@ void MlOptimiserMpi::maximization()
 					// Also perform the unregularized reconstruction
 					if (do_auto_refine && has_converged)
 						readTemporaryDataAndWeightArraysAndReconstruct(ith_recons, 1);
+#ifndef FORCE_USE_ORI_RECONS
+					// only master of single group do the rest work 
+					if (node->grp_rank==0) {
+#endif
+						// Apply the body mask
+						if (mymodel.nr_bodies > 1)
+						{
+							// 19may2015 translate the reconstruction back to its C.O.M.
+							selfTranslate(mymodel.Iref[ith_recons], mymodel.com_bodies[ibody], DONT_WRAP);
 
-					// Apply the body mask
-					if (mymodel.nr_bodies > 1)
-					{
-						// 19may2015 translate the reconstruction back to its C.O.M.
-						selfTranslate(mymodel.Iref[ith_recons], mymodel.com_bodies[ibody], DONT_WRAP);
+							// Also write out unmasked body recontruction
+							FileName fn_tmp;
+							fn_tmp.compose(fn_out + "_unmasked_half1_body", ibody+1,"mrc");
+							Image<RFLOAT> Itmp;
+							Itmp()=mymodel.Iref[ith_recons];
+							Itmp.write(fn_tmp);
+							mymodel.Iref[ith_recons].setXmippOrigin();
+							mymodel.Iref[ith_recons] *= mymodel.masks_bodies[ith_recons];
+						}
 
-						// Also write out unmasked body recontruction
-						FileName fn_tmp;
-						fn_tmp.compose(fn_out + "_unmasked_half1_body", ibody+1,"mrc");
-						Image<RFLOAT> Itmp;
-						Itmp()=mymodel.Iref[ith_recons];
-						Itmp.write(fn_tmp);
-						mymodel.Iref[ith_recons].setXmippOrigin();
-						mymodel.Iref[ith_recons] *= mymodel.masks_bodies[ith_recons];
+						// Apply local symmetry according to a list of masks and their operators
+						if ( (fn_local_symmetry_masks.size() >= 1) && (fn_local_symmetry_operators.size() >= 1) && (!has_converged) )
+							applyLocalSymmetry(mymodel.Iref[ith_recons], fn_local_symmetry_masks, fn_local_symmetry_operators);
+
+						// Shaoda Jul26,2015 - Helical symmetry local refinement
+						if ( (iter > 1) && (do_helical_refine) && (!ignore_helical_symmetry) && (do_helical_symmetry_local_refinement) )
+						{
+							localSearchHelicalSymmetry(
+									mymodel.Iref[ith_recons],
+									mymodel.pixel_size,
+									(particle_diameter / 2.),
+									(helical_tube_inner_diameter / 2.),
+									(helical_tube_outer_diameter / 2.),
+									helical_z_percentage,
+									mymodel.helical_rise_min,
+									mymodel.helical_rise_max,
+									mymodel.helical_rise_inistep,
+									mymodel.helical_rise[ith_recons],
+									mymodel.helical_twist_min,
+									mymodel.helical_twist_max,
+									mymodel.helical_twist_inistep,
+									mymodel.helical_twist[ith_recons]);
+						}
+						// Sjors & Shaoda Apr 2015 - Apply real space helical symmetry and real space Z axis expansion.
+						if ( (do_helical_refine) && (!ignore_helical_symmetry) && (!has_converged) )
+						{
+							imposeHelicalSymmetryInRealSpace(
+									mymodel.Iref[ith_recons],
+									mymodel.pixel_size,
+									(particle_diameter / 2.),
+									(helical_tube_inner_diameter / 2.),
+									(helical_tube_outer_diameter / 2.),
+									helical_z_percentage,
+									mymodel.helical_rise[ith_recons],
+									mymodel.helical_twist[ith_recons],
+									width_mask_edge);
+						}
+						helical_rise_half1 = mymodel.helical_rise[ith_recons];
+						helical_twist_half1 = mymodel.helical_twist[ith_recons];
+#ifndef FORCE_USE_ORI_RECONS
 					}
-
-					// Apply local symmetry according to a list of masks and their operators
-					if ( (fn_local_symmetry_masks.size() >= 1) && (fn_local_symmetry_operators.size() >= 1) && (!has_converged) )
-						applyLocalSymmetry(mymodel.Iref[ith_recons], fn_local_symmetry_masks, fn_local_symmetry_operators);
-
-					// Shaoda Jul26,2015 - Helical symmetry local refinement
-					if ( (iter > 1) && (do_helical_refine) && (!ignore_helical_symmetry) && (do_helical_symmetry_local_refinement) )
-					{
-						localSearchHelicalSymmetry(
-								mymodel.Iref[ith_recons],
-								mymodel.pixel_size,
-								(particle_diameter / 2.),
-								(helical_tube_inner_diameter / 2.),
-								(helical_tube_outer_diameter / 2.),
-								helical_z_percentage,
-								mymodel.helical_rise_min,
-								mymodel.helical_rise_max,
-								mymodel.helical_rise_inistep,
-								mymodel.helical_rise[ith_recons],
-								mymodel.helical_twist_min,
-								mymodel.helical_twist_max,
-								mymodel.helical_twist_inistep,
-								mymodel.helical_twist[ith_recons]);
-					}
-					// Sjors & Shaoda Apr 2015 - Apply real space helical symmetry and real space Z axis expansion.
-					if ( (do_helical_refine) && (!ignore_helical_symmetry) && (!has_converged) )
-					{
-						imposeHelicalSymmetryInRealSpace(
-								mymodel.Iref[ith_recons],
-								mymodel.pixel_size,
-								(particle_diameter / 2.),
-								(helical_tube_inner_diameter / 2.),
-								(helical_tube_outer_diameter / 2.),
-								helical_z_percentage,
-								mymodel.helical_rise[ith_recons],
-								mymodel.helical_twist[ith_recons],
-								width_mask_edge);
-					}
-					helical_rise_half1 = mymodel.helical_rise[ith_recons];
-					helical_twist_half1 = mymodel.helical_twist[ith_recons];
+#endif
 				}
 
 				// In some cases there is not enough memory to reconstruct two random halves in parallel
 				// Therefore the following option exists to perform them sequentially
-				if (do_sequential_halves_recons)
+				if (do_sequential_halves_recons) {
+#ifndef FORCE_USE_ORI_RECONS
+					std::cerr << "WARNING : do sequential halves recons while parallel reconstruct new flag is set." << std::endl;
+#endif
 					MPI_Barrier(MPI_COMM_WORLD);
+				}
 
 				// When splitting the data into two random halves, perform two reconstructions in parallel: one for each subset
 				if (do_split_random_halves)
 				{
+#ifndef FORCE_USE_ORI_RECONS
+					int reconstruct_rank2 = 2 * (ith_recons % ( node->cls_size/2 ) ) + 2;
+					if (node->cls_rank == reconstruct_rank2)
+					{
+#else
 					int reconstruct_rank2 = 2 * (ith_recons % ( (node->size - 1)/2 ) ) + 2;
-
 					if (node->rank == reconstruct_rank2)
 					{
+#endif
 						// Rank 2 does not need to do the joined reconstruction
 						if (!do_join_random_halves)
 						{
@@ -2096,59 +2137,64 @@ void MlOptimiserMpi::maximization()
 						// But rank 2 always does the unfiltered reconstruction
 						if (do_auto_refine && has_converged)
 							readTemporaryDataAndWeightArraysAndReconstruct(ith_recons, 2);
+#ifndef FORCE_USE_ORI_RECONS
+						if (node->grp_rank==0) {
+#endif
+							// Apply the body mask
+							if (mymodel.nr_bodies > 1)
+							{
+								// 19may2015 translate the reconstruction back to its C.O.M.
+								selfTranslate(mymodel.Iref[ith_recons], mymodel.com_bodies[ibody], DONT_WRAP);
 
-						// Apply the body mask
-						if (mymodel.nr_bodies > 1)
-						{
-							// 19may2015 translate the reconstruction back to its C.O.M.
-							selfTranslate(mymodel.Iref[ith_recons], mymodel.com_bodies[ibody], DONT_WRAP);
+								FileName fn_tmp;
+								fn_tmp.compose(fn_out + "_unmasked_half2_body", ibody+1,"mrc");
+								Image<RFLOAT> Itmp;
+								Itmp()=mymodel.Iref[ith_recons];
+								Itmp.write(fn_tmp);
+								mymodel.Iref[ith_recons].setXmippOrigin();
+								mymodel.Iref[ith_recons] *= mymodel.masks_bodies[ith_recons];
+							}
 
-							FileName fn_tmp;
-							fn_tmp.compose(fn_out + "_unmasked_half2_body", ibody+1,"mrc");
-							Image<RFLOAT> Itmp;
-							Itmp()=mymodel.Iref[ith_recons];
-							Itmp.write(fn_tmp);
-							mymodel.Iref[ith_recons].setXmippOrigin();
-							mymodel.Iref[ith_recons] *= mymodel.masks_bodies[ith_recons];
-						}
+							// Apply local symmetry according to a list of masks and their operators
+							if ( (fn_local_symmetry_masks.size() >= 1) && (fn_local_symmetry_operators.size() >= 1) && (!has_converged) )
+								applyLocalSymmetry(mymodel.Iref[ith_recons], fn_local_symmetry_masks, fn_local_symmetry_operators);
 
-						// Apply local symmetry according to a list of masks and their operators
-						if ( (fn_local_symmetry_masks.size() >= 1) && (fn_local_symmetry_operators.size() >= 1) && (!has_converged) )
-							applyLocalSymmetry(mymodel.Iref[ith_recons], fn_local_symmetry_masks, fn_local_symmetry_operators);
-
-						// Shaoda Jul26,2015 - Helical symmetry local refinement
-						if ( (iter > 1) && (do_helical_refine) && (!ignore_helical_symmetry) && (do_helical_symmetry_local_refinement) )
-						{
-							localSearchHelicalSymmetry(
-									mymodel.Iref[ith_recons],
-									mymodel.pixel_size,
-									(particle_diameter / 2.),
-									(helical_tube_inner_diameter / 2.),
-									(helical_tube_outer_diameter / 2.),
-									helical_z_percentage,
-									mymodel.helical_rise_min,
-									mymodel.helical_rise_max,
-									mymodel.helical_rise_inistep,
-									helical_rise_half2,
-									mymodel.helical_twist_min,
-									mymodel.helical_twist_max,
-									mymodel.helical_twist_inistep,
-									helical_twist_half2);
-						}
-						// Sjors & Shaoda Apr 2015 - Apply real space helical symmetry and real space Z axis expansion.
-						if( (do_helical_refine) && (!ignore_helical_symmetry) && (!has_converged) )
-						{
-							imposeHelicalSymmetryInRealSpace(
-									mymodel.Iref[ith_recons],
-									mymodel.pixel_size,
-									(particle_diameter / 2.),
-									(helical_tube_inner_diameter / 2.),
-									(helical_tube_outer_diameter / 2.),
-									helical_z_percentage,
-									helical_rise_half2,
-									helical_twist_half2,
-									width_mask_edge);
-						}
+							// Shaoda Jul26,2015 - Helical symmetry local refinement
+							if ( (iter > 1) && (do_helical_refine) && (!ignore_helical_symmetry) && (do_helical_symmetry_local_refinement) )
+							{
+								localSearchHelicalSymmetry(
+										mymodel.Iref[ith_recons],
+										mymodel.pixel_size,
+										(particle_diameter / 2.),
+										(helical_tube_inner_diameter / 2.),
+										(helical_tube_outer_diameter / 2.),
+										helical_z_percentage,
+										mymodel.helical_rise_min,
+										mymodel.helical_rise_max,
+										mymodel.helical_rise_inistep,
+										helical_rise_half2,
+										mymodel.helical_twist_min,
+										mymodel.helical_twist_max,
+										mymodel.helical_twist_inistep,
+										helical_twist_half2);
+							}
+							// Sjors & Shaoda Apr 2015 - Apply real space helical symmetry and real space Z axis expansion.
+							if( (do_helical_refine) && (!ignore_helical_symmetry) && (!has_converged) )
+							{
+								imposeHelicalSymmetryInRealSpace(
+										mymodel.Iref[ith_recons],
+										mymodel.pixel_size,
+										(particle_diameter / 2.),
+										(helical_tube_inner_diameter / 2.),
+										(helical_tube_outer_diameter / 2.),
+										helical_z_percentage,
+										helical_rise_half2,
+										helical_twist_half2,
+										width_mask_edge);
+							}
+#ifndef FORCE_USE_ORI_RECONS
+						} // end if grp_rank==0
+#endif
 					}
 				}
 
@@ -2198,6 +2244,39 @@ void MlOptimiserMpi::maximization()
 				{
 					if (node->myRandomSubset() == ihalfset)
 					{
+#ifndef FORCE_USE_ORI_RECONS
+						int reconstruct_rank = 2 * (ith_recons % ( node->cls_size/2 ) ) * node->grp_size + ihalfset; // 1, 2, 3, ...
+#ifdef DEBUG
+						printf("Node %d : recon %d, cls_rank %d\n",node->rank, reconstruct_rank, node->cls_rank);
+#endif
+						int my_first_recv = node->myRandomSubset();
+						for (int recv_node = my_first_recv; recv_node < node->size; recv_node += nr_halfsets)
+						{
+							if (node->rank == reconstruct_rank && recv_node != node->rank)
+							{
+#ifdef DEBUG
+								std::cerr << "ihalfset= "<<ihalfset<<" Sending iclass="<<iclass<<" from node "<<reconstruct_rank<<" to node "<<recv_node << std::endl;
+#endif
+								node->relion_MPI_Send(MULTIDIM_ARRAY(mymodel.Iref[ith_recons]), MULTIDIM_SIZE(mymodel.Iref[ith_recons]), MY_MPI_DOUBLE, recv_node, MPITAG_IMAGE, MPI_COMM_WORLD);
+								node->relion_MPI_Send(MULTIDIM_ARRAY(mymodel.data_vs_prior_class[iclass]), MULTIDIM_SIZE(mymodel.data_vs_prior_class[iclass]), MY_MPI_DOUBLE, recv_node, MPITAG_METADATA, MPI_COMM_WORLD);
+								node->relion_MPI_Send(MULTIDIM_ARRAY(mymodel.fourier_coverage_class[iclass]), MULTIDIM_SIZE(mymodel.fourier_coverage_class[iclass]), MY_MPI_DOUBLE, recv_node, MPITAG_METADATA, MPI_COMM_WORLD);
+								node->relion_MPI_Send(MULTIDIM_ARRAY(mymodel.sigma2_class[iclass]), MULTIDIM_SIZE(mymodel.sigma2_class[iclass]), MY_MPI_DOUBLE, recv_node, MPITAG_RFLOAT, MPI_COMM_WORLD);
+								node->relion_MPI_Send(MULTIDIM_ARRAY(mymodel.fsc_halves_class), MULTIDIM_SIZE(mymodel.fsc_halves_class), MY_MPI_DOUBLE, recv_node, MPITAG_RANDOMSEED, MPI_COMM_WORLD);
+							}
+							else if (node->rank != reconstruct_rank && node->rank == recv_node)
+							{
+								//std::cerr << "ihalfset= "<<ihalfset<< " Receiving iclass="<<iclass<<" from node "<<reconstruct_rank<<" at node "<<node->rank<< std::endl;
+								node->relion_MPI_Recv(MULTIDIM_ARRAY(mymodel.Iref[ith_recons]), MULTIDIM_SIZE(mymodel.Iref[ith_recons]), MY_MPI_DOUBLE, reconstruct_rank, MPITAG_IMAGE, MPI_COMM_WORLD, status);
+								node->relion_MPI_Recv(MULTIDIM_ARRAY(mymodel.data_vs_prior_class[iclass]), MULTIDIM_SIZE(mymodel.data_vs_prior_class[iclass]), MY_MPI_DOUBLE, reconstruct_rank, MPITAG_METADATA, MPI_COMM_WORLD, status);
+								node->relion_MPI_Recv(MULTIDIM_ARRAY(mymodel.fourier_coverage_class[iclass]), MULTIDIM_SIZE(mymodel.fourier_coverage_class[iclass]), MY_MPI_DOUBLE, reconstruct_rank, MPITAG_METADATA, MPI_COMM_WORLD, status);
+								node->relion_MPI_Recv(MULTIDIM_ARRAY(mymodel.sigma2_class[iclass]), MULTIDIM_SIZE(mymodel.sigma2_class[iclass]), MY_MPI_DOUBLE, reconstruct_rank, MPITAG_RFLOAT, MPI_COMM_WORLD, status);
+								node->relion_MPI_Recv(MULTIDIM_ARRAY(mymodel.fsc_halves_class), MULTIDIM_SIZE(mymodel.fsc_halves_class), MY_MPI_DOUBLE, reconstruct_rank, MPITAG_RANDOMSEED, MPI_COMM_WORLD, status);
+#ifdef DEBUG
+								std::cerr << "ihalfset= "<<ihalfset<< " Received!!!="<<iclass<<" from node "<<reconstruct_rank<<" at node "<<node->rank<< std::endl;
+#endif
+							}
+						}
+#else // FORCE_USE_ORI_RECONS
 						int reconstruct_rank = 2 * (ith_recons % ( (node->size - 1)/2 ) ) + ihalfset; // first pass halfset1, second pass halfset2
 						int my_first_recv = node->myRandomSubset();
 
@@ -2227,7 +2306,7 @@ void MlOptimiserMpi::maximization()
 #endif
 							}
 						}
-
+#endif // end FORCE_USE_ORI_RECONS
 					}
 				}
 				// No one should continue until we're all here
@@ -2238,7 +2317,11 @@ void MlOptimiserMpi::maximization()
 			}
 			else
 			{
+#ifndef FORCE_USE_ORI_RECONS
+				int reconstruct_rank = (ith_recons % (node->cls_size) ) * node->grp_size + 1;
+#else
 				int reconstruct_rank = (ith_recons % (node->size - 1) ) + 1;
+#endif
 				// Broadcast the reconstructed references to all other MPI nodes
 				node->relion_MPI_Bcast(MULTIDIM_ARRAY(mymodel.Iref[ith_recons]),
 						MULTIDIM_SIZE(mymodel.Iref[ith_recons]), MY_MPI_DOUBLE, reconstruct_rank, MPI_COMM_WORLD);
@@ -2271,17 +2354,28 @@ void MlOptimiserMpi::maximization()
 			if ( (iter > 1) && (do_helical_refine) && (!ignore_helical_symmetry) && (do_helical_symmetry_local_refinement) )
 			{
 				int reconstruct_rank1;
+#ifndef FORCE_USE_ORI_RECONS
+				if (do_split_random_halves)
+					reconstruct_rank1 = 2 * (ith_recons % ( (node->cls_size)/2 ) ) + 1;
+				else
+					reconstruct_rank1 = (ith_recons % (node->cls_size)) * node->grp_size + 1;
+#else
 				if (do_split_random_halves)
 					reconstruct_rank1 = 2 * (ith_recons % ( (node->size - 1)/2 ) ) + 1;
 				else
 					reconstruct_rank1 = ith_recons % (node->size - 1) + 1;
+#endif
 				node->relion_MPI_Bcast(&helical_twist_half1, 1, MY_MPI_DOUBLE, reconstruct_rank1, MPI_COMM_WORLD);
 				node->relion_MPI_Bcast(&helical_rise_half1, 1, MY_MPI_DOUBLE, reconstruct_rank1, MPI_COMM_WORLD);
 
 				// When splitting the data into two random halves, perform two reconstructions in parallel: one for each subset
 				if (do_split_random_halves)
 				{
+#ifndef FORCE_USE_ORI_RECONS
+					int reconstruct_rank2 = 2 * (ith_recons % ( (node->cls_size)/2 ) ) + 2;
+#else
 					int reconstruct_rank2 = 2 * (ith_recons % ( (node->size - 1)/2 ) ) + 2;
+#endif
 					node->relion_MPI_Bcast(&helical_twist_half2, 1, MY_MPI_DOUBLE, reconstruct_rank2, MPI_COMM_WORLD);
 					node->relion_MPI_Bcast(&helical_rise_half2, 1, MY_MPI_DOUBLE, reconstruct_rank2, MPI_COMM_WORLD);
 				}
@@ -2657,6 +2751,9 @@ void MlOptimiserMpi::readTemporaryDataAndWeightArraysAndReconstruct(int iclass, 
 		Itmp().printShape(std::cerr);
 		REPORT_ERROR("Incompatible size of "+fn_root+"_data_real.mrc");
 	}
+#ifndef FORCE_USE_ORI_RECONS
+	if(node->grp_rank==0)
+#endif
 	FOR_ALL_ELEMENTS_IN_ARRAY3D(Itmp())
 	{
 		A3D_ELEM(wsum_model.BPref[iclass].data, k, i, j).real = A3D_ELEM(Itmp(), k, i, j);
@@ -2671,6 +2768,9 @@ void MlOptimiserMpi::readTemporaryDataAndWeightArraysAndReconstruct(int iclass, 
 		Itmp().printShape(std::cerr);
 		REPORT_ERROR("Incompatible size of "+fn_root+"_data_imag.mrc");
 	}
+#ifndef FORCE_USE_ORI_RECONS
+	if(node->grp_rank==0)
+#endif
 	FOR_ALL_ELEMENTS_IN_ARRAY3D(Itmp())
 	{
 		A3D_ELEM(wsum_model.BPref[iclass].data, k, i, j).imag = A3D_ELEM(Itmp(), k, i, j);
@@ -2685,6 +2785,9 @@ void MlOptimiserMpi::readTemporaryDataAndWeightArraysAndReconstruct(int iclass, 
 		Itmp().printShape(std::cerr);
 		REPORT_ERROR("Incompatible size of "+fn_root+"_weight.mrc");
 	}
+#ifndef FORCE_USE_ORI_RECONS
+	if(node->grp_rank==0)
+#endif
 	FOR_ALL_ELEMENTS_IN_ARRAY3D(Itmp())
 	{
 		A3D_ELEM(wsum_model.BPref[iclass].weight, k, i, j) = A3D_ELEM(Itmp(), k, i, j);
@@ -2704,6 +2807,9 @@ void MlOptimiserMpi::readTemporaryDataAndWeightArraysAndReconstruct(int iclass, 
 	Iunreg.MDMainHeader.setValue(EMDL_IMAGE_SAMPLINGRATE_Y, mymodel.pixel_size);
 	Iunreg.MDMainHeader.setValue(EMDL_IMAGE_SAMPLINGRATE_Z, mymodel.pixel_size);
 	// And write the resulting model to disc
+#ifndef FORCE_USE_ORI_RECONS
+	if(node->grp_rank==0)
+#endif
 	Iunreg.write(fn_root+"_unfil.mrc");
 
 
