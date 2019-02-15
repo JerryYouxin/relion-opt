@@ -3019,7 +3019,8 @@ void MlOptimiserCuda::resetData()
 
 	classStreams.resize(nr_classes, 0);
 	for (int i = 0; i < nr_classes; i++)
-		HANDLE_ERROR(cudaStreamCreate(&classStreams[i])); //HANDLE_ERROR(cudaStreamCreateWithFlags(&classStreams[i],cudaStreamNonBlocking));
+		//HANDLE_ERROR(cudaStreamCreate(&classStreams[i])); 
+		HANDLE_ERROR(cudaStreamCreateWithFlags(&classStreams[i],cudaStreamNonBlocking));
 
 	transformer1.clear();
 	transformer2.clear();

@@ -176,6 +176,10 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
+SET(INTEL_2017_LIB "/opt/intel/compilers_and_libraries_2017.6.256/linux/compiler/lib/intel64")
+SET(MPI_LIBRARIES "${MPI_LIBRARIES};${INTEL_2017_LIB}/libimf.so;${INTEL_2017_LIB}/libsvml.so")
+SET(MPI_CXX_LIBRARIES "${MPI_CXX_LIBRARIES};${INTEL_2017_LIB}/libimf.so;${INTEL_2017_LIB}/libsvml.so")
+
 option(FORCE_OWN_FLTK "FORCE_OWN_FLTK" OFF)
 # --------------------------------------------------------------------------X11/FLTK--
 FIND_PACKAGE(X11)

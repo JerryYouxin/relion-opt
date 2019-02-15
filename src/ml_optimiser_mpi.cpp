@@ -975,8 +975,11 @@ void MlOptimiserMpi::expectation()
 			HANDLE_ERROR(cudaMemGetInfo( &free, &total ));
 
 			free = (float) free / (float)cudaDeviceShares[i];
+#ifndef USE_ORI_GPUMEM_ASSUMPTION
+			size_t required_free = requested_free_gpu_memory + GPU_THREAD_MEMORY_OVERHEAD_MB*1000*1000;
+#else
 			size_t required_free = requested_free_gpu_memory + GPU_THREAD_MEMORY_OVERHEAD_MB*1000*1000*threadcountOnDevice[i];
-
+#endif
 			if (free < required_free)
 			{
 				printf("WARNING: Ignoring required free GPU memory amount of %zu MB, due to space insufficiency.\n", required_free/1000000);
