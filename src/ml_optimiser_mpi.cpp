@@ -1935,8 +1935,8 @@ void MlOptimiserMpi::maximization()
 			if (wsum_model.pdf_class[iclass] > 0.)
 			{
 				// Parallelise: each MPI-node has a different reference
-#ifndef FORCE_USE_ORI_RECONS
 				int reconstruct_rank1;
+#ifndef FORCE_USE_ORI_RECONS
 				if (do_split_random_halves)
 					reconstruct_rank1 = 2 * (ith_recons % ( node->cls_size/2 ) ) + 1;
 				else
@@ -1976,17 +1976,37 @@ void MlOptimiserMpi::maximization()
 							tau2_fudge = mymodel.tau2_fudge_factor;
 						}
 #ifdef TIMING
+#ifdef CUDA
+						if(do_gpu && (wsum_model.BPref[ith_recons]).ref_dim==3)
+							(wsum_model.BPref[ith_recons]).reconstruct_gpu(node->rank,mymodel.Iref[ith_recons], gridding_nr_iter, do_map,
+									tau2_fudge, mymodel.tau2_class[ith_recons], mymodel.sigma2_class[ith_recons],
+									mymodel.data_vs_prior_class[ith_recons], mymodel.fourier_coverage_class[ith_recons],
+									mymodel.fsc_halves_class, wsum_model.pdf_class[iclass],
+									do_split_random_halves, (do_join_random_halves || do_always_join_random_halves), nr_threads, minres_map, &timer);
+						else
+#else
 						(wsum_model.BPref[ith_recons]).reconstruct(mymodel.Iref[ith_recons], gridding_nr_iter, do_map,
 								tau2_fudge, mymodel.tau2_class[ith_recons], mymodel.sigma2_class[ith_recons],
 								mymodel.data_vs_prior_class[ith_recons], mymodel.fourier_coverage_class[ith_recons],
 								mymodel.fsc_halves_class, wsum_model.pdf_class[iclass],
 								do_split_random_halves, (do_join_random_halves || do_always_join_random_halves), nr_threads, minres_map, &timer);
+#endif
+#else
+#ifdef CUDA
+						if(do_gpu && (wsum_model.BPref[ith_recons]).ref_dim==3)
+							(wsum_model.BPref[ith_recons]).reconstruct_gpu(node->rank,mymodel.Iref[ith_recons], gridding_nr_iter, do_map,
+									tau2_fudge, mymodel.tau2_class[ith_recons], mymodel.sigma2_class[ith_recons],
+									mymodel.data_vs_prior_class[ith_recons], mymodel.fourier_coverage_class[ith_recons],
+									mymodel.fsc_halves_class, wsum_model.pdf_class[iclass],
+									do_split_random_halves, (do_join_random_halves || do_always_join_random_halves), nr_threads, minres_map);
+						else
 #else
 						(wsum_model.BPref[ith_recons]).reconstruct(mymodel.Iref[ith_recons], gridding_nr_iter, do_map,
 								tau2_fudge, mymodel.tau2_class[ith_recons], mymodel.sigma2_class[ith_recons],
 								mymodel.data_vs_prior_class[ith_recons], mymodel.fourier_coverage_class[ith_recons],
 								mymodel.fsc_halves_class, wsum_model.pdf_class[iclass],
 								do_split_random_halves, (do_join_random_halves || do_always_join_random_halves), nr_threads, minres_map);
+#endif
 #endif
 						if(do_sgd)
 						{
@@ -2114,13 +2134,22 @@ void MlOptimiserMpi::maximization()
 							{
 								tau2_fudge = mymodel.tau2_fudge_factor;
 							}
-
+#ifdef CUDA
+							if(do_gpu && (wsum_model.BPref[ith_recons]).ref_dim==3)
+								(wsum_model.BPref[ith_recons]).reconstruct_gpu(node->rank, 
+										mymodel.Iref[ith_recons], gridding_nr_iter, do_map,
+										tau2_fudge, mymodel.tau2_class[ith_recons], mymodel.sigma2_class[ith_recons],
+										mymodel.data_vs_prior_class[ith_recons], mymodel.fourier_coverage_class[ith_recons],
+										mymodel.fsc_halves_class, wsum_model.pdf_class[iclass],
+										do_split_random_halves, (do_join_random_halves || do_always_join_random_halves), nr_threads, minres_map);
+							else
+#else
 							(wsum_model.BPref[ith_recons]).reconstruct(mymodel.Iref[ith_recons], gridding_nr_iter, do_map,
 									tau2_fudge, mymodel.tau2_class[ith_recons], mymodel.sigma2_class[ith_recons],
 									mymodel.data_vs_prior_class[ith_recons], mymodel.fourier_coverage_class[ith_recons],
 									mymodel.fsc_halves_class, wsum_model.pdf_class[iclass],
 									do_split_random_halves, (do_join_random_halves || do_always_join_random_halves), nr_threads, minres_map);
-
+#endif
 							if (do_sgd)
 							{
 								// Now update formula: dV_kl^(n) = (mu) * dV_kl^(n-1) + (1-mu)*step_size*G_kl^(n)
@@ -2795,10 +2824,13 @@ void MlOptimiserMpi::readTemporaryDataAndWeightArraysAndReconstruct(int iclass, 
 	{
 		A3D_ELEM(wsum_model.BPref[iclass].weight, k, i, j) = A3D_ELEM(Itmp(), k, i, j);
 	}
-
+#ifdef CUDA
+	if(do_gpu && wsum_model.BPref[iclass].ref_dim==3)
+		wsum_model.BPref[iclass].reconstruct_gpu(node->rank,Iunreg(), gridding_nr_iter, false, 1., dummy, dummy, dummy, dummy, dummy, 1., false, true, nr_threads, -1);
+	else
+#endif
 	// Now perform the unregularized reconstruction
 	wsum_model.BPref[iclass].reconstruct(Iunreg(), gridding_nr_iter, false, 1., dummy, dummy, dummy, dummy, dummy, 1., false, true, nr_threads, -1);
-
 	// Update header information
 	RFLOAT avg, stddev, minval, maxval;
 	Iunreg().computeStats(avg, stddev, minval, maxval);

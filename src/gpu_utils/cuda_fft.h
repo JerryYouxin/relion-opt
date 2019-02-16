@@ -6,6 +6,8 @@
 #include <cuda_runtime.h>
 #include <cufft.h>
 
+#include "src/gpu_utils/cuda_kernels/fft_helper.cuh"
+
 #ifdef DEBUG_CUDA
 #define HANDLE_CUFFT_ERROR( err ) (CufftHandleError( err, __FILE__, __LINE__ ))
 #else
@@ -21,17 +23,13 @@ static void CufftHandleError( cufftResult err, const char *file, int line )
     }
 }
 
-class CudaFFT
+template<typename REAL_T, typename COMPLEX_T, bool isDouble, bool allocHost, bool isComplex=false, bool customAlloc=true>
+class CudaFFT_TP
 {
 	bool planSet;
 public:
-#ifdef CUDA_DOUBLE_PRECISION
-	CudaGlobalPtr<cufftDoubleReal> reals;
-	CudaGlobalPtr<cufftDoubleComplex> fouriers;
-#else
-	CudaGlobalPtr<cufftReal> reals;
-	CudaGlobalPtr<cufftComplex> fouriers;
-#endif
+	CudaGlobalPtr<REAL_T,customAlloc> reals;
+	CudaGlobalPtr<COMPLEX_T,customAlloc> fouriers;
 	cufftHandle cufftPlanForward, cufftPlanBackward;
 	int direction;
 	int dimension, idist, odist, istride, ostride;
@@ -42,7 +40,7 @@ public:
 	CudaCustomAllocator *CFallocator;
 	int batchSpace, batchIters, reqN;
 
-	CudaFFT(cudaStream_t stream, CudaCustomAllocator *allocator, int transformDimension = 2):
+	CudaFFT_TP(cudaStream_t stream, CudaCustomAllocator *allocator, int transformDimension = 2):
 		reals(stream, allocator),
 		fouriers(stream, allocator),
 		cufftPlanForward(0),
@@ -65,37 +63,70 @@ public:
 	{
 		size_t needed(0);
 
-	    size_t biggness;
+	  size_t biggness;
 
-#ifdef CUDA_DOUBLE_PRECISION
-	    if(direction<=0)
-	    {
-			HANDLE_CUFFT_ERROR( cufftEstimateMany(dimension, inembed, inembed, istride, idist, onembed, ostride, odist, CUFFT_D2Z, batch, &biggness));
-			needed += biggness;
-	    }
-		if(direction>=0)
-		{
-			HANDLE_CUFFT_ERROR( cufftEstimateMany(dimension, inembed, onembed, ostride, odist, inembed, istride, idist, CUFFT_Z2D, batch, &biggness));
-			needed += biggness;
+		if(isDouble) {
+			if(isComplex) {
+				if(direction<=0)
+				{
+					HANDLE_CUFFT_ERROR( cufftEstimateMany(dimension, inembed, inembed, istride, idist, onembed, ostride, odist, CUFFT_Z2Z, batch, &biggness));
+					needed += biggness;
+				}
+				if(direction>=0)
+				{
+					HANDLE_CUFFT_ERROR( cufftEstimateMany(dimension, inembed, onembed, ostride, odist, inembed, istride, idist, CUFFT_Z2Z, batch, &biggness));
+					needed += biggness;
+				}
+			}
+			else {
+				if(direction<=0)
+				{
+					HANDLE_CUFFT_ERROR( cufftEstimateMany(dimension, inembed, inembed, istride, idist, onembed, ostride, odist, CUFFT_D2Z, batch, &biggness));
+					needed += biggness;
+				}
+				if(direction>=0)
+				{
+					HANDLE_CUFFT_ERROR( cufftEstimateMany(dimension, inembed, onembed, ostride, odist, inembed, istride, idist, CUFFT_Z2D, batch, &biggness));
+					needed += biggness;
+				}
+			}
 		}
-#else
-		if(direction<=0)
-		{
-			HANDLE_CUFFT_ERROR( cufftEstimateMany(dimension, inembed, inembed, istride, idist, onembed, ostride, odist, CUFFT_R2C, batch, &biggness));
-			needed += biggness;
+		else {
+			if(isComplex) {
+				if(direction<=0)
+				{
+					HANDLE_CUFFT_ERROR( cufftEstimateMany(dimension, inembed, inembed, istride, idist, onembed, ostride, odist, CUFFT_C2C, batch, &biggness));
+					needed += biggness;
+				}
+				if(direction>=0)
+				{
+					HANDLE_CUFFT_ERROR( cufftEstimateMany(dimension, inembed, onembed, ostride, odist, inembed, istride, idist, CUFFT_C2C, batch, &biggness));
+					needed += biggness;
+				}
+			}
+			else {
+				if(direction<=0)
+				{
+					HANDLE_CUFFT_ERROR( cufftEstimateMany(dimension, inembed, inembed, istride, idist, onembed, ostride, odist, CUFFT_R2C, batch, &biggness));
+					needed += biggness;
+				}
+				if(direction>=0)
+				{
+					HANDLE_CUFFT_ERROR( cufftEstimateMany(dimension, inembed, onembed, ostride, odist, inembed, istride, idist, CUFFT_C2R, batch, &biggness));
+					needed += biggness;
+				}
+			}
 		}
-		if(direction>=0)
-		{
-			HANDLE_CUFFT_ERROR( cufftEstimateMany(dimension, inembed, onembed, ostride, odist, inembed, istride, idist, CUFFT_C2R, batch, &biggness));
-			needed += biggness;
-		}
-#endif
-		size_t res = needed + (size_t)odist*(size_t)batch*sizeof(XFLOAT)*(size_t)2 + (size_t)idist*(size_t)batch*sizeof(XFLOAT);
+		size_t res;
+		if(isComplex)
+			res = needed + (size_t)odist*(size_t)batch*sizeof(COMPLEX_T) + (size_t)idist*(size_t)batch*sizeof(REAL_T);
+		else
+			res = needed + (size_t)odist*(size_t)batch*sizeof(REAL_T)*(size_t)2 + (size_t)idist*(size_t)batch*sizeof(REAL_T);
 
 		return res;
 	}
 
-	void setSize(size_t x, size_t y, size_t z, int batch = 1, int setDirection = 0)
+	int setSize(size_t x, size_t y, size_t z, int batch = 1, int setDirection = 0)
 	{
 
 		/* Optional direction input restricts transformer to
@@ -209,8 +240,11 @@ public:
 			batchSize.assign(batchIters,batchSpace); // specify batchIters of batches, each with batchSpace orientations
 			batchSize[batchIters-1] = batchSpace - (batchSpace*batchIters - batch); // set last to care for remainder.
 
-			if(needed>avail)
-				CRITICAL(ERRFFTMEMLIM);
+			if(needed>avail) {
+				//CRITICAL(ERRFFTMEMLIM);
+				std::cout << "WARNING: GPU mem may not enough! Use CPU" << std::endl;
+				return -1;
+			}
 
 //			std::cerr << std::endl << "NOTE: Having to use " << batchIters << " batches of orientations ";
 //			std::cerr << "to achieve the total requested " << batch << " orientations" << std::endl;
@@ -228,11 +262,11 @@ public:
 
 		reals.setSize(idist*batchSize[0]);
 		reals.device_alloc();
-		reals.host_alloc();
+		if(allocHost) reals.host_alloc();
 
 		fouriers.setSize(odist*batchSize[0]);
 		fouriers.device_alloc();
-		fouriers.host_alloc();
+		if(allocHost) fouriers.host_alloc();
 
 //		DEBUG_HANDLE_ERROR(cudaMemGetInfo( &avail, &total ));
 //		needed = estimate(batchSize[0], fudge);
@@ -241,81 +275,136 @@ public:
 //		printf("%15li\n", needed);
 //		std::cout << "avail  = ";
 //		printf("%15li\n", avail);
+		setPlan();
+		return 0;
+	}
 
-#ifdef CUDA_DOUBLE_PRECISION
-	    if(direction<=0)
-	    {
-	    	HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanForward,  dimension, inembed, inembed, istride, idist, onembed, ostride, odist, CUFFT_D2Z, batchSize[0]));
-	   		HANDLE_CUFFT_ERROR( cufftSetStream(cufftPlanForward, fouriers.getStream()));
-	    }
-	    if(direction>=0)
-	    {
-	    	HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanBackward, dimension, inembed, onembed, ostride, odist, inembed, istride, idist, CUFFT_Z2D, batchSize[0]));
-			HANDLE_CUFFT_ERROR( cufftSetStream(cufftPlanBackward, reals.getStream()));
-	    }
-		planSet = true;
+	void setPlan() {
+		if(isDouble) {
+			if(isComplex) {
+				if(direction<=0)
+				{
+					HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanForward,  dimension, inembed, inembed, istride, idist, onembed, ostride, odist, CUFFT_Z2Z, batchSize[0]));
+					HANDLE_CUFFT_ERROR( cufftSetStream(cufftPlanForward, fouriers.getStream()));
+				}
+				if(direction>=0)
+				{
+					HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanBackward, dimension, inembed, onembed, ostride, odist, inembed, istride, idist, CUFFT_Z2Z, batchSize[0]));
+					HANDLE_CUFFT_ERROR( cufftSetStream(cufftPlanBackward, reals.getStream()));
+				}
+			} 
+			else {
+				if(direction<=0)
+				{
+					HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanForward,  dimension, inembed, inembed, istride, idist, onembed, ostride, odist, CUFFT_D2Z, batchSize[0]));
+					HANDLE_CUFFT_ERROR( cufftSetStream(cufftPlanForward, fouriers.getStream()));
+				}
+				if(direction>=0)
+				{
+					HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanBackward, dimension, inembed, onembed, ostride, odist, inembed, istride, idist, CUFFT_Z2D, batchSize[0]));
+					HANDLE_CUFFT_ERROR( cufftSetStream(cufftPlanBackward, reals.getStream()));
+				}
+			}
+			planSet = true;
+		}
+		else {
+			if(isComplex) {
+				if(direction<=0)
+				{
+					HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanForward,  dimension, inembed, inembed, istride, idist, onembed, ostride, odist, CUFFT_C2C, batchSize[0]));
+					HANDLE_CUFFT_ERROR( cufftSetStream(cufftPlanForward, fouriers.getStream()));
+				}
+				if(direction>=0)
+				{
+					HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanBackward, dimension, inembed, onembed, ostride, odist, inembed, istride, idist, CUFFT_C2C, batchSize[0]));
+					HANDLE_CUFFT_ERROR( cufftSetStream(cufftPlanBackward, reals.getStream()));
+				}
+			}
+			else {
+				if(direction<=0)
+				{
+					HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanForward,  dimension, inembed, inembed, istride, idist, onembed, ostride, odist, CUFFT_R2C, batchSize[0]));
+					HANDLE_CUFFT_ERROR( cufftSetStream(cufftPlanForward, fouriers.getStream()));
+				}
+				if(direction>=0)
+				{
+					HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanBackward, dimension, inembed, onembed, ostride, odist, inembed, istride, idist, CUFFT_C2R, batchSize[0]));
+					HANDLE_CUFFT_ERROR( cufftSetStream(cufftPlanBackward, reals.getStream()));
+				}
+			}
+			planSet = true;
+		}
 	}
 
 	void forward()
-	{ HANDLE_CUFFT_ERROR( cufftExecD2Z(cufftPlanForward, ~reals, ~fouriers) ); }
+	{
+		if(isComplex) {
+			if(isDouble)
+				HANDLE_CUFFT_ERROR( cufftExecZ2Z(cufftPlanForward, (cufftDoubleComplex*)~reals, (cufftDoubleComplex*)~fouriers, CUFFT_FORWARD )); 
+			else
+				HANDLE_CUFFT_ERROR( cufftExecC2C(cufftPlanForward, (cufftComplex*)~reals, (cufftComplex*)~fouriers, CUFFT_FORWARD ));
+		}
+		else {
+			if(isDouble)
+				HANDLE_CUFFT_ERROR( cufftExecD2Z(cufftPlanForward, (cufftDoubleReal*)~reals, (cufftDoubleComplex*)~fouriers) ); 
+			else
+				HANDLE_CUFFT_ERROR( cufftExecR2C(cufftPlanForward, (cufftReal*)~reals, (cufftComplex*)~fouriers) );
+		}
+	}
 
 	void backward()
-	{ HANDLE_CUFFT_ERROR( cufftExecZ2D(cufftPlanBackward, ~fouriers, ~reals) ); }
+	{
+		if(isComplex) {
+			if(isDouble) 
+				HANDLE_CUFFT_ERROR( cufftExecZ2Z(cufftPlanBackward, (cufftDoubleComplex*)~fouriers, (cufftDoubleComplex*)~reals, CUFFT_INVERSE ));
+			else
+				HANDLE_CUFFT_ERROR( cufftExecC2C(cufftPlanBackward, (cufftComplex*)~fouriers, (cufftComplex*)~reals, CUFFT_INVERSE ));
+		}
+		else {
+			if(isDouble) 
+				HANDLE_CUFFT_ERROR( cufftExecZ2D(cufftPlanBackward, (cufftDoubleComplex*)~fouriers, (cufftDoubleReal*)~reals) );
+			else
+				HANDLE_CUFFT_ERROR( cufftExecC2R(cufftPlanBackward, (cufftComplex*)~fouriers, (cufftReal*)~reals) );
+		}
+	}
 
 	void backward(CudaGlobalPtr<cufftDoubleReal> &dst)
 		{ HANDLE_CUFFT_ERROR( cufftExecZ2D(cufftPlanBackward, ~fouriers, ~dst) ); }
-#else
-	 	if(direction<=0)
-	 	{
-	 		HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanForward,  dimension, inembed, inembed, istride, idist, onembed, ostride, odist, CUFFT_R2C, batchSize[0]));
-	 		HANDLE_CUFFT_ERROR( cufftSetStream(cufftPlanForward, fouriers.getStream()));
-	 	}
-	 	if(direction>=0)
-	 	{
-	 		HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanBackward, dimension, inembed, onembed, ostride, odist, inembed, istride, idist, CUFFT_C2R, batchSize[0]));
-	 		HANDLE_CUFFT_ERROR( cufftSetStream(cufftPlanBackward, reals.getStream()));
-	 	}
-		planSet = true;
-	}
 
-	void forward()
-	{
-		if(direction==1)
-		{
-			std::cout << "trying to execute a forward plan for a cudaFFT transformer which is backwards-only" << std::endl;
-			CRITICAL(ERRCUFFTDIRF);
-		}
-		HANDLE_CUFFT_ERROR( cufftExecR2C(cufftPlanForward, ~reals, ~fouriers) );
+	void clearPlan() {
+		if(direction<=0)
+			HANDLE_CUFFT_ERROR(cufftDestroy(cufftPlanForward));
+		if(direction>=0)
+			HANDLE_CUFFT_ERROR(cufftDestroy(cufftPlanBackward));
+		planSet = false;
 	}
-
-	void backward()
-	{
-		if(direction==-1)
-		{
-			std::cout << "trying to execute a backwards plan for a cudaFFT transformer which is forwards-only" << std::endl;
-			CRITICAL(ERRCUFFTDIRR);
-		}
-		HANDLE_CUFFT_ERROR( cufftExecC2R(cufftPlanBackward, ~fouriers, ~reals) );
-	}
-
-#endif
 
 	void clear()
 	{
 		if(planSet)
 		{
-			reals.free_if_set();
-			fouriers.free_if_set();
-			if(direction<=0)
-				HANDLE_CUFFT_ERROR(cufftDestroy(cufftPlanForward));
-			if(direction>=0)
-				HANDLE_CUFFT_ERROR(cufftDestroy(cufftPlanBackward));
-			planSet = false;
+			if(allocHost) reals.free_host_if_set();
+			reals.free_device_if_set();
+			if(allocHost) fouriers.free_host_if_set();
+			fouriers.free_device_if_set();
+			clearPlan();
 		}
 	}
 
-	~CudaFFT()
+	~CudaFFT_TP()
 	{clear();}
 };
+
+#ifdef CUDA_DOUBLE_PRECISION
+	typedef CudaFFT_TP<cufftDoubleReal,cufftDoubleComplex,true,true> CudaFFT;
+#else
+	typedef CudaFFT_TP<cufftReal,cufftComplex,false,true> CudaFFT;
+#endif
+
+#ifdef RELION_SINGLE_PRECISION
+	typedef CudaFFT_TP<cufftReal,cufftComplex,false,false,false,false> RelionCudaFFT;
+#else
+	typedef CudaFFT_TP<cufftDoubleReal,cufftDoubleComplex,true,false,false,false> RelionCudaFFT;
+#endif
 
 #endif

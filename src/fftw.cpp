@@ -49,9 +49,9 @@
 #include <string.h>
 #include <math.h>
 
-#ifndef FORCE_USE_ORI_RECONS
+//#ifndef FORCE_USE_ORI_RECONS
 #include<omp.h>
-#endif
+//#endif
 
 static pthread_mutex_t fftw_plan_mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -92,14 +92,14 @@ void FourierTransformer::init()
     fPlanBackward    = NULL;
     dataPtr          = NULL;
     complexDataPtr   = NULL;
-#ifndef FORCE_USE_ORI_RECONS
+//#ifndef FORCE_USE_ORI_RECONS
 	int nr_threads = omp_get_max_threads();
 	bool thread_ok = (nr_threads>1);
     if(thread_ok) {
         fftw_init_threads();
         fftw_plan_with_nthreads(nr_threads);
     }
-#endif
+//#endif
 }
 
 void FourierTransformer::clear()
@@ -119,14 +119,14 @@ void FourierTransformer::cleanup()
     // Then clean up all the junk fftw keeps lying around
     // SOMEHOW THE FOLLOWING IS NOT ALLOWED WHEN USING MULTPLE TRANSFORMER OBJECTS....
 #ifdef RELION_SINGLE_PRECISION
-#ifndef FORCE_USE_ORI_RECONS
+//#ifndef FORCE_USE_ORI_RECONS
 	fftwf_cleanup_threads();
-#endif
+//#endif
     fftwf_cleanup();
 #else
-#ifndef FORCE_USE_ORI_RECONS
+//#ifndef FORCE_USE_ORI_RECONS
 	fftw_cleanup_threads();
-#endif
+//#endif
     fftw_cleanup();
 #endif
 

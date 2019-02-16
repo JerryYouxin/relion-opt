@@ -19,8 +19,10 @@
 
 #ifdef RELION_SINGLE_PRECISION
 	#define RFLOAT float
+	#define __COMPLEX_T float2
 #else
 	#define RFLOAT double
+	#define __COMPLEX_T double2
 #endif
 
 // GENERAL -----------------------------
@@ -85,6 +87,10 @@
 #define NR_CLASS_MUTEXES 5
 
 //The approximate minimum amount of memory each process occupies on a device (in MBs)
+#ifndef USE_ORI_GPUMEM_ASSUMPTION
+#define GPU_THREAD_MEMORY_OVERHEAD_MB 500
+#else
 #define GPU_THREAD_MEMORY_OVERHEAD_MB 200
+#endif
 
 #endif /* CUDA_SETTINGS_H_ */
