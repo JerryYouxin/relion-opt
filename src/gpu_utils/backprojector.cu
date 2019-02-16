@@ -690,7 +690,11 @@ void BackProjector::windowToOridimRealSpace_gpu(int rank, FourierTransformer &tr
 	RFLOAT normfft;
 	if (ref_dim == 2)
 	{
-		cutransformer->setSize(padoridim,padoridim,1);
+		// only backward
+		if(cutransformer->setSize(padoridim,padoridim,1,1,1)<0)
+		{
+			CRITICAL("TOO LARGE 2D");
+		}
 		Xsize = padoridim;
 		Ysize = padoridim;
 		Zsize = 1;
@@ -700,7 +704,11 @@ void BackProjector::windowToOridimRealSpace_gpu(int rank, FourierTransformer &tr
 	}
 	else
 	{
-		cutransformer->setSize(padoridim,padoridim,padoridim);
+		// only backward
+		if(cutransformer->setSize(padoridim,padoridim,padoridim,1,1)<0)
+		{
+			CRITICAL("TOO LARGE 3D");
+		}
 		Xsize = padoridim;
 		Ysize = padoridim;
 		Zsize = padoridim;
@@ -742,17 +750,17 @@ void BackProjector::windowToOridimRealSpace_gpu(int rank, FourierTransformer &tr
 	DTOC(OriDimTimer,OriDim4);
 	DTIC(OriDimTimer,OriDim5);
 	cutransformer->backward();
-	LAUNCH_HANDLE_ERROR(cudaGetLastError());
-    cutransformer->reals.h_ptr = Mout.data;
-    cutransformer->reals.cp_to_host();
 	cutransformer->reals.streamSync();
+	LAUNCH_HANDLE_ERROR(cudaGetLastError());
 	DTOC(OriDimTimer,OriDim5);
 	Mout.setXmippOrigin();
 
 	// Shift the map back to its origin
 
     DTIC(OriDimTimer,OriDim6);
-    fft_runCenterFFT(cutransformer->reals,XSIZE(Mout),YSIZE(Mout),ZSIZE(Mout),true);
+	fft_runCenterFFT(cutransformer->reals,XSIZE(Mout),YSIZE(Mout),ZSIZE(Mout),true);
+	cutransformer->reals.streamSync();
+	LAUNCH_HANDLE_ERROR(cudaGetLastError());
 	DTOC(OriDimTimer,OriDim6);
 
 	// 1. Window in real-space
