@@ -3445,7 +3445,7 @@ void MlOptimiser::expectationOneParticle(long int my_ori_particle, int thread_id
 
 }
 
-void MlOptimiser::symmetriseReconstructions()
+void MlOptimiser::symmetriseReconstructions(int rank)
 {
 	for (int ibody = 0; ibody < mymodel.nr_bodies; ibody++)
 	{
@@ -3458,6 +3458,11 @@ void MlOptimiser::symmetriseReconstructions()
 			{
 				// Immediately after expectation process. Do rise and twist for all asymmetrical units in Fourier space
 				// Also convert helical rise to pixels for BPref object
+#ifdef CUDA
+				if(do_gpu)
+					wsum_model.BPref[ith_recons].symmetrise_gpu(rank, mymodel.helical_nr_asu, mymodel.helical_twist[ith_recons], mymodel.helical_rise[ith_recons] / mymodel.pixel_size);
+				else
+#endif
 				wsum_model.BPref[ith_recons].symmetrise(mymodel.helical_nr_asu, mymodel.helical_twist[ith_recons], mymodel.helical_rise[ith_recons] / mymodel.pixel_size);
 			}
 		}

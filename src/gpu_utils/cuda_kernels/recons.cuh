@@ -4,6 +4,22 @@
 #include <cuda_runtime.h>
 #include "src/gpu_utils/cuda_settings.h"
 #include "src/gpu_utils/cuda_device_utils.cuh"
+
+__constant__ RFLOAT __R_array [100 * 4 * 4];
+
+__global__ void symmetrise_kernel(const __COMPLEX_T * __restrict__ my_data_temp_D ,
+                                  const  RFLOAT* __restrict__ my_weight_temp_D,
+                                  __COMPLEX_T * my_data_D,
+                                  RFLOAT* my_weight_D,
+                                  int xdim,
+                                  int ydim,
+                                  int xydim,
+                                  int zdim,
+                                  int start_x,
+                                  int start_y,
+                                  int start_z,
+                                  int my_rmax2,
+                                  int nr_SymsNo);
 //-----------------------------------------------------------------------------------------------
 __global__ void multFTBlobKernel_noMask( 
         RFLOAT* real, 

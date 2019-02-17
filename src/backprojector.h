@@ -306,6 +306,11 @@ public:
 	void windowToOridimRealSpace(FourierTransformer &transformer, MultidimArray<RFLOAT> &Mout, int nr_threads = 1, bool printTimes = false);
 
 #ifdef CUDA
+	void symmetrise_gpu(int rank, int nr_helical_asu = 1, RFLOAT helical_twist = 0., RFLOAT helical_rise = 0.);
+	void enforceHermitianSymmetry_gpu();
+	void applyHelicalSymmetry_gpu(int nr_helical_asu = 1, RFLOAT helical_twist = 0., RFLOAT helical_rise = 0.);
+	void applyPointGroupSymmetry_gpu(int rank);
+
 	void windowToOridimRealSpace_gpu(int rank, FourierTransformer &transformer, void* _transformer, MultidimArray<RFLOAT> &Mout, int nr_threads, bool printTimes);
 	void reconstruct_gpu(int rank,
 					 MultidimArray<RFLOAT> &vol_out,

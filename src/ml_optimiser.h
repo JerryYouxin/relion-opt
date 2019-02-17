@@ -766,7 +766,7 @@ public:
 	/* Function to call symmetrise of BackProjector helical objects for each class or body
 	 * Do rise and twist for all asymmetrical units in Fourier space
 	 * */
-	void symmetriseReconstructions();
+	void symmetriseReconstructions(int rank=0);
 
 	/* Apply local symmetry according to a list of masks and their operators
 	 * */

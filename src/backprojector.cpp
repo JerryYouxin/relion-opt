@@ -33,8 +33,9 @@
 	#define RCTIC(timer,label)
     #define RCTOC(timer,label)
 #endif
-
-
+#ifndef FORCE_USE_ORI_SYMM
+#include <omp.h>
+#endif
 
 void BackProjector::initialiseDataAndWeight(int current_size)
 {
@@ -1281,14 +1282,38 @@ void BackProjector::reconstruct(MultidimArray<RFLOAT> &vol_out,
 
 void BackProjector::symmetrise(int nr_helical_asu, RFLOAT helical_twist, RFLOAT helical_rise)
 {
+#ifdef TIMING
+	Timer sym_timer;
+	int TIMING_TOTAL = sym_timer.setNew("Total");
+	int TIMING_ENFORCE = sym_timer.setNew("-- enforceHermitianSymmetry");
+	int TIMING_HELICAL = sym_timer.setNew("-- applyHelicalSymmetry");
+	int TIMING_POINTGROUP = sym_timer.setNew("-- applyPointGroupSymmetry");
+	sym_timer.tic(TIMING_ENFORCE);
+#endif
 	// First make sure the input arrays are obeying Hermitian symmetry,
 	// which is assumed in the rotation operators of both helical and point group symmetry
 	enforceHermitianSymmetry();
 
+#ifdef TIMING
+	sym_timer.toc(TIMING_ENFORCE);
+	sym_timer.tic(TIMING_HELICAL);
+#endif
+
 	// Then apply helical and point group symmetry (order irrelevant?)
 	applyHelicalSymmetry(nr_helical_asu, helical_twist, helical_rise);
 
+#ifdef TIMING
+	sym_timer.toc(TIMING_HELICAL);
+	sym_timer.tic(TIMING_POINTGROUP);
+#endif
+
 	applyPointGroupSymmetry();
+
+#ifdef TIMING
+	sym_timer.toc(TIMING_POINTGROUP);
+	sym_timer.printTimes(true);
+#endif
+
 }
 
 void BackProjector::enforceHermitianSymmetry()
@@ -1472,6 +1497,8 @@ void BackProjector::applyHelicalSymmetry(int nr_helical_asu, RFLOAT helical_twis
 
 }
 
+
+#ifdef FORCE_USE_ORI_SYMM
 void BackProjector::applyPointGroupSymmetry()
 {
 
@@ -1626,6 +1653,183 @@ void BackProjector::applyPointGroupSymmetry()
 	}
 
 }
+#else
+void BackProjector::applyPointGroupSymmetry()
+{
+
+//#define DEBUG_SYMM
+#ifdef DEBUG_SYMM
+	std::cerr << " SL.SymsNo()= " << SL.SymsNo() << std::endl;
+	std::cerr << " SL.true_symNo= " << SL.true_symNo << std::endl;
+#endif
+
+	int rmax2 = ROUND(r_max * padding_factor) * ROUND(r_max * padding_factor);
+	int symno = SL.SymsNo();
+	if (symno > 0 && ref_dim == 3)
+	{
+		Matrix2D<RFLOAT> L(4, 4), R(4, 4); // A matrix from the list
+		MultidimArray<RFLOAT> ori_weight;
+		MultidimArray<Complex > ori_data;
+		ori_weight = weight;
+		ori_data = data;
+		RFLOAT*  w_data = weight.data;
+		Complex* d_data = data.data;
+		RFLOAT*  w_ori  = ori_weight.data;
+		Complex* d_ori  = ori_data.data;
+		int x_start = STARTINGX(data);
+		int y_start = STARTINGY(data);
+		int z_start = STARTINGZ(data);
+		int xdim = XSIZE(weight);
+		int ydim = YSIZE(weight);
+		int zdim = ZSIZE(weight);
+		int dxdim= XSIZE(data);
+		int dydim= YSIZE(data);
+		int dzdim= ZSIZE(data);
+		//omp_set_num_threads(1);
+		int tnum= omp_get_max_threads();
+		// Extract R matrix to local arrays
+		RFLOAT* allR = new RFLOAT[9*symno*tnum];
+		for (int i=0;i<tnum;++i)
+		{
+			RFLOAT* llR = allR + i*9*symno;
+			for (int isym = 0; isym < symno; isym++)
+			{
+				SL.get_matrices(isym, L, R);
+				RFLOAT* lR = llR + isym*9;
+				lR[0] = R(0,0); lR[1] = R(0,1); lR[2] = R(0,2); 
+				lR[3] = R(1,0); lR[4] = R(1,1); lR[5] = R(1,2); 
+				lR[6] = R(2,0); lR[7] = R(2,1); lR[8] = R(2,2); 
+			}
+		}
+		// begin omp parallel
+		#pragma omp parallel firstprivate(allR, d_data, w_data, w_ori, d_ori, symno, rmax2, x_start, y_start, z_start, xdim, ydim, zdim, dxdim, dydim, dzdim)
+		{
+			int tid = omp_get_thread_num();
+			int tn  = omp_get_num_threads();
+			int rest= zdim % tn; 
+			int zsize = zdim / tn; 
+			int zstart;
+			if(tid < rest) {
+				++zsize; zstart = zsize*tid + z_start;
+			} else {
+				zstart = zsize*tid + rest + z_start;
+			}
+			int zend = zstart + zsize;
+			int yend = y_start+ ydim;
+			int xend = x_start+ xdim;
+			RFLOAT* llR = allR + tid*9*symno;
+			RFLOAT x, y, z, fx, fy, fz, xp, yp, zp, r2;
+			bool is_neg_x;
+			int x0, x1, y0, y1, z0, z1;
+			Complex d000, d001, d010, d011, d100, d101, d110, d111;
+			Complex dx00, dx01, dx10, dx11, dxy0, dxy1;
+			RFLOAT dd000, dd001, dd010, dd011, dd100, dd101, dd110, dd111;
+			RFLOAT ddx00, ddx01, ddx10, ddx11, ddxy0, ddxy1;
+			for (long int k=zstart;k<zend;++k) {
+				for (long int i=y_start;i<yend;++i) {
+					for(long int j=x_start;j<xend;++j) {
+						x = (RFLOAT)j; // STARTINGX(sum_weight) is zero!
+						y = (RFLOAT)i;
+						z = (RFLOAT)k;
+						r2 = x*x + y*y + z*z;
+						if (r2 <= rmax2)
+						{
+							RFLOAT sum_weight = w_ori[(k-z_start)*xdim*ydim+(i-y_start)*xdim+(j-x_start)];
+							Complex sum_data = d_ori[(k-z_start)*dxdim*dydim+(i-y_start)*dxdim+(j-x_start)];
+							for(int isym = 0; isym < symno; isym++)
+							{
+								RFLOAT* lR = llR + isym*9;
+								// coords_output(x,y) = A * coords_input (xp,yp)
+								xp = x * lR[0] + y * lR[1] + z * lR[2];
+								yp = x * lR[3] + y * lR[4] + z * lR[5];
+								zp = x * lR[6] + y * lR[7] + z * lR[8];
+
+								// Only asymmetric half is stored
+								if (xp < 0)
+								{
+									// Get complex conjugated hermitian symmetry pair
+									xp = -xp;
+									yp = -yp;
+									zp = -zp;
+									is_neg_x = true;
+								}
+								else
+								{
+									is_neg_x = false;
+								}
+
+								// Trilinear interpolation (with physical coords)
+								// Subtract STARTINGY and STARTINGZ to accelerate access to data (STARTINGX=0)
+								// In that way use DIRECT_A3D_ELEM, rather than A3D_ELEM
+								x0 = FLOOR(xp);
+								fx = xp - x0;
+								x1 = x0 + 1;
+
+								y0 = FLOOR(yp);
+								fy = yp - y0;
+								y0 -=  y_start;
+								y1 = y0 + 1;
+
+								z0 = FLOOR(zp);
+								fz = zp - z0;
+								z0 -= z_start;
+								z1 = z0 + 1;
+
+								// First interpolate (complex) data
+								d000 = d_ori[z0*dxdim*dydim+y0*dxdim+x0];
+								d001 = d_ori[z0*dxdim*dydim+y0*dxdim+x1];
+								d010 = d_ori[z0*dxdim*dydim+y1*dxdim+x0];
+								d011 = d_ori[z0*dxdim*dydim+y1*dxdim+x1];
+								d100 = d_ori[z1*dxdim*dydim+y0*dxdim+x0];
+								d101 = d_ori[z1*dxdim*dydim+y0*dxdim+x1];
+								d110 = d_ori[z1*dxdim*dydim+y1*dxdim+x0];
+								d111 = d_ori[z1*dxdim*dydim+y1*dxdim+x1];
+
+								dx00 = LIN_INTERP(fx, d000, d001);
+								dx01 = LIN_INTERP(fx, d100, d101);
+								dx10 = LIN_INTERP(fx, d010, d011);
+								dx11 = LIN_INTERP(fx, d110, d111);
+								dxy0 = LIN_INTERP(fy, dx00, dx10);
+								dxy1 = LIN_INTERP(fy, dx01, dx11);
+
+								// Take complex conjugated for half with negative x
+								if (is_neg_x)
+									sum_data += conj(LIN_INTERP(fz, dxy0, dxy1));
+								else
+									sum_data += LIN_INTERP(fz, dxy0, dxy1);
+
+								// Then interpolate (real) weight
+								dd000 = w_ori[z0*xdim*ydim+y0*xdim+x0];
+								dd001 = w_ori[z0*xdim*ydim+y0*xdim+x1];
+								dd010 = w_ori[z0*xdim*ydim+y1*xdim+x0];
+								dd011 = w_ori[z0*xdim*ydim+y1*xdim+x1];
+								dd100 = w_ori[z1*xdim*ydim+y0*xdim+x0];
+								dd101 = w_ori[z1*xdim*ydim+y0*xdim+x1];
+								dd110 = w_ori[z1*xdim*ydim+y1*xdim+x0];
+								dd111 = w_ori[z1*xdim*ydim+y1*xdim+x1];
+
+								ddx00 = LIN_INTERP(fx, dd000, dd001);
+								ddx01 = LIN_INTERP(fx, dd100, dd101);
+								ddx10 = LIN_INTERP(fx, dd010, dd011);
+								ddx11 = LIN_INTERP(fx, dd110, dd111);
+								ddxy0 = LIN_INTERP(fy, ddx00, ddx10);
+								ddxy1 = LIN_INTERP(fy, ddx01, ddx11);
+
+								sum_weight +=  LIN_INTERP(fz, ddxy0, ddxy1);
+							} // end for isym
+							w_data[(k-z_start)*xdim*ydim+(i-y_start)*xdim+(j-x_start)] = sum_weight;
+							d_data[(k-z_start)*dxdim*dydim+(i-y_start)*dxdim+(j-x_start)] = sum_data;
+						} // end if r2 <= rmax2
+					} // end for j
+				} // end for i
+			} // end for k
+		} // end omp parallel
+		delete[] allR;
+	} // end if
+
+}
+#endif
+
 
 void BackProjector::convoluteBlobRealSpace(FourierTransformer &transformer, bool do_mask)
 {

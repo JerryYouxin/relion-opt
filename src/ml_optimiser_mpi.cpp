@@ -3070,7 +3070,7 @@ void MlOptimiserMpi::iterate()
 #ifdef TIMING
 			timer.tic(TIMING_EXP_SYMMRC);
 #endif
-			symmetriseReconstructions();
+			symmetriseReconstructions(node->rank);
 #ifdef TIMING
 			timer.toc(TIMING_EXP_SYMMRC);
 #endif

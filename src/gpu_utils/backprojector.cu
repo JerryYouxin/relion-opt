@@ -15,6 +15,172 @@
 #define DTOC(timer,stamp)
 #endif
 
+void BackProjector::symmetrise_gpu(int rank, int nr_helical_asu, RFLOAT helical_twist, RFLOAT helical_rise)
+{
+#ifdef TIMING
+	Timer sym_timer;
+	int TIMING_TOTAL = sym_timer.setNew("Total");
+	int TIMING_ENFORCE = sym_timer.setNew("-- enforceHermitianSymmetry");
+	int TIMING_HELICAL = sym_timer.setNew("-- applyHelicalSymmetry");
+	int TIMING_POINTGROUP = sym_timer.setNew("-- applyPointGroupSymmetry");
+	sym_timer.tic(TIMING_ENFORCE);
+#endif
+	// First make sure the input arrays are obeying Hermitian symmetry,
+	// which is assumed in the rotation operators of both helical and point group symmetry
+	enforceHermitianSymmetry();
+#ifdef TIMING
+	sym_timer.toc(TIMING_ENFORCE);
+	sym_timer.tic(TIMING_HELICAL);
+#endif
+	// Then apply helical and point group symmetry (order irrelevant?)
+	applyHelicalSymmetry(nr_helical_asu, helical_twist, helical_rise);
+#ifdef TIMING
+	sym_timer.toc(TIMING_HELICAL);
+	sym_timer.tic(TIMING_POINTGROUP);
+#endif
+    int devCount;
+    cudaGetDeviceCount(&devCount);
+    int dev_id=rank%devCount;
+    DEBUG_HANDLE_ERROR(cudaSetDevice(dev_id));
+	applyPointGroupSymmetry_gpu(rank);
+	HANDLE_ERROR(cudaDeviceReset());
+#ifdef TIMING
+	sym_timer.toc(TIMING_POINTGROUP);
+	sym_timer.printTimes(true);
+#endif
+}
+
+void BackProjector::applyPointGroupSymmetry_gpu(int rank) 
+{
+#ifdef TIMING
+	Timer sym_timer;
+	int TIMING_TOTAL = sym_timer.setNew("Total");
+	int TIMING_START_1	= sym_timer.setNew("-- stream create");
+	int TIMING_START_2	= sym_timer.setNew("-- start initialize");
+	int TIMING_MEMALLOC = sym_timer.setNew("-- cudaMalloc");
+	int TIMING_MEMFREE  = sym_timer.setNew("-- cudaFree");
+	int TIMING_CPYTOSYM = sym_timer.setNew("-- cudaMemcpyToSymbol");
+	int TIMING_CPYTODEV = sym_timer.setNew("-- cudaMemcpyHostToDev");
+	int TIMING_DEVTODEV = sym_timer.setNew("-- cudaMemcpyDevToDev");
+	int TIMING_DEVTOHST = sym_timer.setNew("-- cudaMemcpyHostToDev");
+	int TIMING_KERNEL   = sym_timer.setNew("-- symmKernel");
+#endif
+	DTIC(sym_timer,TIMING_TOTAL);
+	int rmax2 = ROUND(r_max * padding_factor) * ROUND(r_max * padding_factor);
+	if (SL.SymsNo() > 0 && ref_dim == 3)
+	{
+		DTIC(sym_timer,TIMING_START_1);
+		//cudaStream_t stream;
+		//cudaStreamCreate(&stream);
+		//HANDLE_ERROR(cudaGetLastError());
+		DTOC(sym_timer,TIMING_START_1);
+		DTIC(sym_timer,TIMING_START_2);
+		int zdim = ZSIZE(weight);
+		int ydim = YSIZE(weight);
+		int xdim = XSIZE(weight);
+		int xydim= YXSIZE(weight);
+		int model_size = xydim * zdim;
+		if(model_size<=0) return;
+		int start_x = STARTINGX(weight);
+		int start_y = STARTINGY(weight);
+		int start_z = STARTINGZ(weight);
+		RFLOAT* my_weight_temp_D=NULL;
+		RFLOAT* my_weight_D=NULL;
+		__COMPLEX_T * my_data_temp_D=NULL;
+		__COMPLEX_T * my_data_D=NULL;
+		DTOC(sym_timer,TIMING_START_2);
+		DTIC(sym_timer,TIMING_CPYTOSYM);
+		HANDLE_ERROR(cudaGetLastError());
+		cudaMemcpyToSymbolAsync(__R_array, SL.__R.mdata, SL.SymsNo() * 4 * 4 * sizeof(RFLOAT), 0 , cudaMemcpyHostToDevice,0);
+		HANDLE_ERROR(cudaGetLastError());
+		//size_t avail, total_mem;
+		//cudaMemGetInfo( &avail, &total_mem ) ;
+		//int memAlignmentSize;
+		//cudaDeviceGetAttribute ( &memAlignmentSize, cudaDevAttrTextureAlignment, 0 );
+		DEBUG_HANDLE_ERROR(cudaStreamSynchronize(0));
+		DTOC(sym_timer,TIMING_CPYTOSYM);
+		dim3 blockDim(BLOCK_SIZE, 1, 1);
+		dim3 gridDim((model_size + BLOCK_SIZE - 1) / BLOCK_SIZE, 1, 1);
+		//printf("Model size: %d\n",model_size);
+		DTIC(sym_timer,TIMING_MEMALLOC);
+		// race for multi-process allocation
+		#define NTRY 20
+		int itry=0;
+		while(1) {
+			if( cudaMalloc((void**)&my_weight_temp_D, model_size * sizeof(RFLOAT      ))==cudaSuccess &&
+				cudaMalloc((void**)&my_data_temp_D  , model_size * sizeof(__COMPLEX_T ))==cudaSuccess &&
+				cudaMalloc((void**)&my_weight_D     , model_size * sizeof(RFLOAT      ))==cudaSuccess &&
+				cudaMalloc((void**)&my_data_D       , model_size * sizeof(__COMPLEX_T ))==cudaSuccess) {
+					break;
+			}
+			printf("######## WARNING : GPU memory not enough, wait for others ... %d #########\n",itry);
+			if(my_weight_temp_D!=NULL) cudaFree(my_weight_temp_D);
+			else                       cudaGetLastError();
+			if(my_data_temp_D  !=NULL) cudaFree(my_data_temp_D  );
+			else                       cudaGetLastError();
+			if(my_weight_D     !=NULL) cudaFree(my_weight_D     );
+			else                       cudaGetLastError();
+			if(my_data_D       !=NULL) cudaFree(my_data_D       );
+			else                       cudaGetLastError();
+			++itry;
+			if(itry>=NTRY) {
+				printf("######## ERROR : GPU memory still not enough after trying %d attempts #########\n", itry);
+				REPORT_ERROR("GPU memory not enough!");
+			}
+			usleep(100000);
+		}
+		#undef NTRY
+		DTOC(sym_timer,TIMING_MEMALLOC);
+		DTIC(sym_timer,TIMING_CPYTODEV);
+		cudaMemcpyAsync(my_data_D, data.data, model_size * sizeof(__COMPLEX_T ), cudaMemcpyHostToDevice,0);
+		cudaMemcpyAsync(my_weight_D, weight.data, model_size * sizeof(RFLOAT), cudaMemcpyHostToDevice,0);
+		DEBUG_HANDLE_ERROR(cudaStreamSynchronize(0));
+		DTOC(sym_timer,TIMING_CPYTODEV);
+		DTIC(sym_timer,TIMING_DEVTODEV);
+		cudaMemcpyAsync(my_data_temp_D, my_data_D, model_size * sizeof(__COMPLEX_T ), cudaMemcpyDeviceToDevice,0);
+		cudaMemcpyAsync(my_weight_temp_D, my_weight_D, model_size * sizeof(RFLOAT), cudaMemcpyDeviceToDevice,0);
+		//HANDLE_ERROR(cudaGetLastError());
+		DEBUG_HANDLE_ERROR(cudaStreamSynchronize(0));
+		DTOC(sym_timer,TIMING_DEVTODEV);
+		DTIC(sym_timer,TIMING_KERNEL);
+		symmetrise_kernel <<< gridDim, blockDim >>>(my_data_temp_D,
+													my_weight_temp_D,
+													my_data_D,
+													my_weight_D,
+													xdim,
+													ydim,
+													xydim,
+													zdim,
+													start_x,
+													start_y,
+													start_z,
+													rmax2,
+													SL.SymsNo());
+		HANDLE_ERROR(cudaGetLastError());
+		DEBUG_HANDLE_ERROR(cudaStreamSynchronize(0));
+		DTOC(sym_timer,TIMING_KERNEL);
+		DTIC(sym_timer,TIMING_DEVTOHST);
+		cudaMemcpyAsync(data.data, my_data_D, model_size * sizeof(__COMPLEX_T ), cudaMemcpyDeviceToHost,0);
+		cudaMemcpyAsync(weight.data, my_weight_D, model_size * sizeof(RFLOAT), cudaMemcpyDeviceToHost,0);
+		HANDLE_ERROR(cudaGetLastError());
+		DEBUG_HANDLE_ERROR(cudaStreamSynchronize(0));
+		DTOC(sym_timer,TIMING_DEVTOHST);
+		DTIC(sym_timer,TIMING_MEMFREE);
+		cudaFree(my_data_temp_D);
+		cudaFree(my_weight_temp_D);
+		cudaFree(my_data_D);
+		cudaFree(my_weight_D);
+		//cudaStreamDestroy(stream);
+		HANDLE_ERROR(cudaGetLastError());
+		DTOC(sym_timer,TIMING_MEMFREE);
+	}
+	DTOC(sym_timer,TIMING_TOTAL);
+#ifdef TIMING
+	if(rank==1)
+		sym_timer.printTimes(1);
+#endif
+}
+
 void BackProjector::reconstruct_gpu(int rank,
                                 MultidimArray<RFLOAT> &vol_out,
                                 int max_iter_preweight,
@@ -50,6 +216,7 @@ void BackProjector::reconstruct_gpu(int rank,
 			nr_threads,
 			minres_map,
 			printTimes);
+		return ;
 	}
 #ifdef TIMING
 	Timer ReconTimer;
@@ -103,11 +270,13 @@ void BackProjector::reconstruct_gpu(int rank,
 	CudaGlobalPtr<RFLOAT, false> cuFweight(stream);
 	CudaGlobalPtr<double, false> cuFnewweight(stream);
 
+	printf("pad_size=%d, ref_dim=%d\n",pad_size,ref_dim);
+
     // Set Fweight, Fnewweight and Fconv to the right size
     if (ref_dim == 2) {
 		vol_out.setDimensions(pad_size, pad_size, 1, 1);
 		if(cutransformer.setSize(pad_size, pad_size, 1,1,1)<0) {
-			printf("\n=== Warning : something went wrong when prepare FFT plan, use CPU instread ===\n");
+			printf("\n=== Warning : something went wrong when prepare FFT plan, use CPU instead ===\n");
 			cutransformer.clear();
 			HANDLE_ERROR(cudaDeviceSynchronize());
 			cudaStreamDestroy(stream);
@@ -128,6 +297,7 @@ void BackProjector::reconstruct_gpu(int rank,
 				nr_threads,
 				minres_map,
 				printTimes);
+			return ;
 		}
 	}
     else {
@@ -135,7 +305,7 @@ void BackProjector::reconstruct_gpu(int rank,
         // Trick transformer with the right dimensions
 		vol_out.setDimensions(pad_size, pad_size, pad_size, 1);
 		if(cutransformer.setSize(pad_size, pad_size, pad_size,1,1)<0) {
-			printf("\n=== Warning : something went wrong when prepare FFT plan, use CPU instread ===\n");
+			printf("\n=== Warning : something went wrong when prepare FFT plan, use CPU instead ===\n");
 			cutransformer.clear();
 			HANDLE_ERROR(cudaDeviceSynchronize());
 			cudaStreamDestroy(stream);
@@ -156,6 +326,7 @@ void BackProjector::reconstruct_gpu(int rank,
 				nr_threads,
 				minres_map,
 				printTimes);
+			return ;
 		}
 	}
 
