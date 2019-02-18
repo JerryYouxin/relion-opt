@@ -1,5 +1,16 @@
 #include "src/gpu_utils/cuda_kernels/recons.cuh"
 #include "src/macros.h"
+#include <stdio.h>
+
+__constant__ RFLOAT __R_array [100 * 4 * 4];
+
+void set_R(const RFLOAT* R, int symno, cudaStream_t stream)
+{
+	if( symno > 100) {
+		REPORT_ERROR("symsno > 100!!!");
+	}
+	cudaMemcpyToSymbolAsync(__R_array, R, symno * 4 * 4 * sizeof(RFLOAT), 0 , cudaMemcpyHostToDevice,stream);
+}
 
 __global__ void symmetrise_kernel(const __COMPLEX_T * __restrict__ my_data_temp_D ,
                                   const  RFLOAT* __restrict__ my_weight_temp_D,
@@ -40,13 +51,13 @@ __global__ void symmetrise_kernel(const __COMPLEX_T * __restrict__ my_data_temp_
 	RFLOAT real, img, weight;
 	weight = real = img = 0.;
 
-	for (int i = 0; i < nr_SymsNo; i++)
+	for (int isym = 0; isym < nr_SymsNo; isym++)
 	{
 		// coords_output(x,y) = A * coords_input (xp,yp)
 
-		xp = (RFLOAT)x * __R_array[i * 4 * 4] + (RFLOAT)y *  __R_array[i * 4 * 4 + 1] + (RFLOAT)z *  __R_array[i * 4 * 4 + 2];
-		yp = (RFLOAT)x *  __R_array[i * 4 * 4 + 1 * 4] + (RFLOAT)y *  __R_array[i * 4 * 4 + 1 + 1 * 4] + (RFLOAT)z *  __R_array[i * 4 * 4 + 2 + 1 * 4];
-		zp = (RFLOAT)x *  __R_array[i * 4 * 4 + 2 * 4] + (RFLOAT)y *  __R_array[i * 4 * 4 + 1 + 2 * 4] + (RFLOAT)z *  __R_array[i * 4 * 4 + 2 + 2 * 4];
+		xp = (RFLOAT)x * __R_array[isym * 4 * 4] + (RFLOAT)y *  __R_array[isym * 4 * 4 + 1] + (RFLOAT)z *  __R_array[isym * 4 * 4 + 2];
+		yp = (RFLOAT)x *  __R_array[isym * 4 * 4 + 1 * 4] + (RFLOAT)y *  __R_array[isym * 4 * 4 + 1 + 1 * 4] + (RFLOAT)z *  __R_array[isym * 4 * 4 + 2 + 1 * 4];
+		zp = (RFLOAT)x *  __R_array[isym * 4 * 4 + 2 * 4] + (RFLOAT)y *  __R_array[isym * 4 * 4 + 1 + 2 * 4] + (RFLOAT)z *  __R_array[isym * 4 * 4 + 2 + 2 * 4];
 		// Only asymmetric half is stored
 		if (xp < 0)
 		{
@@ -99,28 +110,29 @@ __global__ void symmetrise_kernel(const __COMPLEX_T * __restrict__ my_data_temp_
 		d110_i = my_data_temp_D[z1 * xydim + y1 * xdim + x0].y;
 		d111_i = my_data_temp_D[z1 * xydim + y1 * xdim + x1].y;
 
-		dx00_r = d000_r + (d001_r - d000_r) * fx;
-		dx00_i = d000_i + (d001_i - d000_i) * fx;
-		dx01_r = d100_r + (d101_r - d100_r) * fx;
-		dx01_i = d100_i + (d101_i - d100_i) * fx;
-		dx10_r = d010_r + (d011_r - d010_r) * fx;
-		dx10_i = d010_i + (d011_i - d010_i) * fx;
-		dx11_r = d110_r + (d111_r - d110_r) * fx;
-		dx11_i = d110_i + (d111_i - d110_i) * fx;
+		dx00_r = LIN_INTERP(fx, d000_r, d001_r);
+		dx01_r = LIN_INTERP(fx, d100_r, d101_r);
+		dx10_r = LIN_INTERP(fx, d010_r, d011_r);
+		dx11_r = LIN_INTERP(fx, d110_r, d111_r);
+		dxy0_r = LIN_INTERP(fy, dx00_r, dx10_r);
+		dxy1_r = LIN_INTERP(fy, dx01_r, dx11_r);
 
-		dxy0_r = dx00_r + (dx10_r - dx00_r) * fy;
-		dxy0_i = dx00_i + (dx10_i - dx00_i) * fy;
-		dxy1_r = dx01_r + (dx11_r - dx01_r) * fy;
-		dxy1_i = dx01_i + (dx11_i - dx01_i) * fy;
+		dx00_i = LIN_INTERP(fx, d000_i, d001_i);
+		dx01_i = LIN_INTERP(fx, d100_i, d101_i);
+		dx10_i = LIN_INTERP(fx, d010_i, d011_i);
+		dx11_i = LIN_INTERP(fx, d110_i, d111_i);
+		dxy0_i = LIN_INTERP(fy, dx00_i, dx10_i);
+		dxy1_i = LIN_INTERP(fy, dx01_i, dx11_i);
+
 		if (is_neg_x)
 		{
-			real += dxy0_r + (dxy1_r - dxy0_r) * fz;
-			img -= (dxy0_i + (dxy1_i - dxy0_i) * fz);
+			real += LIN_INTERP(fz, dxy0_r, dxy1_r);
+			img  -= LIN_INTERP(fz, dxy0_i, dxy1_i);
 		}
 		else
 		{
-			real += dxy0_r + (dxy1_r - dxy0_r) * fz;
-			img += (dxy0_i + (dxy1_i - dxy0_i) * fz);
+			real += LIN_INTERP(fz, dxy0_r, dxy1_r);
+			img  += LIN_INTERP(fz, dxy0_i, dxy1_i);
 		}
 
 		// Then interpolate (real) weight

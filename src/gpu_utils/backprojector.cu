@@ -15,6 +15,8 @@
 #define DTOC(timer,stamp)
 #endif
 
+extern __constant__ RFLOAT __R_array [100 * 4 * 4];
+
 void BackProjector::symmetrise_gpu(int rank, int nr_helical_asu, RFLOAT helical_twist, RFLOAT helical_rise)
 {
 #ifdef TIMING
@@ -23,6 +25,8 @@ void BackProjector::symmetrise_gpu(int rank, int nr_helical_asu, RFLOAT helical_
 	int TIMING_ENFORCE = sym_timer.setNew("-- enforceHermitianSymmetry");
 	int TIMING_HELICAL = sym_timer.setNew("-- applyHelicalSymmetry");
 	int TIMING_POINTGROUP = sym_timer.setNew("-- applyPointGroupSymmetry");
+	int TIMING_GPUSET  = sym_timer.setNew("-- set gpu");
+	int TIMING_GPURESET= sym_timer.setNew("-- reset gpu");
 	sym_timer.tic(TIMING_ENFORCE);
 #endif
 	// First make sure the input arrays are obeying Hermitian symmetry,
@@ -36,16 +40,24 @@ void BackProjector::symmetrise_gpu(int rank, int nr_helical_asu, RFLOAT helical_
 	applyHelicalSymmetry(nr_helical_asu, helical_twist, helical_rise);
 #ifdef TIMING
 	sym_timer.toc(TIMING_HELICAL);
-	sym_timer.tic(TIMING_POINTGROUP);
+	sym_timer.tic(TIMING_GPUSET);
 #endif
     int devCount;
     cudaGetDeviceCount(&devCount);
     int dev_id=rank%devCount;
-    DEBUG_HANDLE_ERROR(cudaSetDevice(dev_id));
+	DEBUG_HANDLE_ERROR(cudaSetDevice(dev_id));
+#ifdef TIMING
+	sym_timer.toc(TIMING_GPUSET);
+	sym_timer.tic(TIMING_POINTGROUP);
+#endif
 	applyPointGroupSymmetry_gpu(rank);
-	HANDLE_ERROR(cudaDeviceReset());
 #ifdef TIMING
 	sym_timer.toc(TIMING_POINTGROUP);
+	sym_timer.tic(TIMING_GPURESET);
+#endif
+	HANDLE_ERROR(cudaDeviceReset());
+#ifdef TIMING
+	sym_timer.toc(TIMING_GPURESET);
 	sym_timer.printTimes(true);
 #endif
 }
@@ -91,13 +103,9 @@ void BackProjector::applyPointGroupSymmetry_gpu(int rank)
 		DTOC(sym_timer,TIMING_START_2);
 		DTIC(sym_timer,TIMING_CPYTOSYM);
 		HANDLE_ERROR(cudaGetLastError());
-		cudaMemcpyToSymbolAsync(__R_array, SL.__R.mdata, SL.SymsNo() * 4 * 4 * sizeof(RFLOAT), 0 , cudaMemcpyHostToDevice,0);
-		HANDLE_ERROR(cudaGetLastError());
+		set_R(SL.__R.mdata, SL.SymsNo(), 0);
 		//size_t avail, total_mem;
-		//cudaMemGetInfo( &avail, &total_mem ) ;
-		//int memAlignmentSize;
-		//cudaDeviceGetAttribute ( &memAlignmentSize, cudaDevAttrTextureAlignment, 0 );
-		DEBUG_HANDLE_ERROR(cudaStreamSynchronize(0));
+		//HANDLE_ERROR(cudaStreamSynchronize(0));
 		DTOC(sym_timer,TIMING_CPYTOSYM);
 		dim3 blockDim(BLOCK_SIZE, 1, 1);
 		dim3 gridDim((model_size + BLOCK_SIZE - 1) / BLOCK_SIZE, 1, 1);
@@ -134,13 +142,13 @@ void BackProjector::applyPointGroupSymmetry_gpu(int rank)
 		DTIC(sym_timer,TIMING_CPYTODEV);
 		cudaMemcpyAsync(my_data_D, data.data, model_size * sizeof(__COMPLEX_T ), cudaMemcpyHostToDevice,0);
 		cudaMemcpyAsync(my_weight_D, weight.data, model_size * sizeof(RFLOAT), cudaMemcpyHostToDevice,0);
-		DEBUG_HANDLE_ERROR(cudaStreamSynchronize(0));
+		//HANDLE_ERROR(cudaStreamSynchronize(0));
 		DTOC(sym_timer,TIMING_CPYTODEV);
 		DTIC(sym_timer,TIMING_DEVTODEV);
 		cudaMemcpyAsync(my_data_temp_D, my_data_D, model_size * sizeof(__COMPLEX_T ), cudaMemcpyDeviceToDevice,0);
 		cudaMemcpyAsync(my_weight_temp_D, my_weight_D, model_size * sizeof(RFLOAT), cudaMemcpyDeviceToDevice,0);
 		//HANDLE_ERROR(cudaGetLastError());
-		DEBUG_HANDLE_ERROR(cudaStreamSynchronize(0));
+		HANDLE_ERROR(cudaStreamSynchronize(0));
 		DTOC(sym_timer,TIMING_DEVTODEV);
 		DTIC(sym_timer,TIMING_KERNEL);
 		symmetrise_kernel <<< gridDim, blockDim >>>(my_data_temp_D,
@@ -157,13 +165,13 @@ void BackProjector::applyPointGroupSymmetry_gpu(int rank)
 													rmax2,
 													SL.SymsNo());
 		HANDLE_ERROR(cudaGetLastError());
-		DEBUG_HANDLE_ERROR(cudaStreamSynchronize(0));
+		HANDLE_ERROR(cudaStreamSynchronize(0));
 		DTOC(sym_timer,TIMING_KERNEL);
 		DTIC(sym_timer,TIMING_DEVTOHST);
 		cudaMemcpyAsync(data.data, my_data_D, model_size * sizeof(__COMPLEX_T ), cudaMemcpyDeviceToHost,0);
 		cudaMemcpyAsync(weight.data, my_weight_D, model_size * sizeof(RFLOAT), cudaMemcpyDeviceToHost,0);
 		HANDLE_ERROR(cudaGetLastError());
-		DEBUG_HANDLE_ERROR(cudaStreamSynchronize(0));
+		HANDLE_ERROR(cudaStreamSynchronize(0));
 		DTOC(sym_timer,TIMING_DEVTOHST);
 		DTIC(sym_timer,TIMING_MEMFREE);
 		cudaFree(my_data_temp_D);

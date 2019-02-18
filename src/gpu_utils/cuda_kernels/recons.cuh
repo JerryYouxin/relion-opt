@@ -5,7 +5,7 @@
 #include "src/gpu_utils/cuda_settings.h"
 #include "src/gpu_utils/cuda_device_utils.cuh"
 
-__constant__ RFLOAT __R_array [100 * 4 * 4];
+void set_R(const RFLOAT* R, int symno, cudaStream_t stream);
 
 __global__ void symmetrise_kernel(const __COMPLEX_T * __restrict__ my_data_temp_D ,
                                   const  RFLOAT* __restrict__ my_weight_temp_D,

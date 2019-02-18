@@ -62,6 +62,16 @@ void init_random(__COMPLEX_T* A, int size)
     init_random((RFLOAT*)A,2*size);
 }
 
+void init_from(RFLOAT* dst, RFLOAT* src, int size)
+{
+    memcpy(dst,src,size*sizeof(RFLOAT));
+}
+
+void init_from(__COMPLEX_T* dst, __COMPLEX_T* src, int size)
+{
+    memcpy(dst,src,size*sizeof(__COMPLEX_T));
+}
+
 bool validate(RFLOAT* opt, RFLOAT* ref, int xs, int ys, int zs, const char* prefix)
 {
     double sum=0.0;
@@ -100,6 +110,48 @@ bool validate(__COMPLEX_T* opt, __COMPLEX_T* ref, int xs, int ys, int zs, const 
     }
     printf("%s-- Check Passed, err sum = %lf\n", prefix, sum);
     return true;
+}
+
+void printData(RFLOAT* data, int js, int is, int ks, int xi, int yi, int zi, int xs, int ys, int zs, const char* prefix)
+{
+    printf("%sstart from %d %d %d, will print %d %d %d size (of %d %d %d)\n",prefix,js,is,ks,xi,yi,zi,xs,ys,zs);
+    for(int k=ks;k<ks+zi;++k) {
+        printf("%ssection %d\t: [\n",prefix,k);
+        for(int i=is;i<is+yi;++i) {
+            printf("%s\t",prefix);
+            for(int j=js;j<js+xi;++j) {
+                int idx = k*xs*ys+i*xs+j;
+                printf("\t%lf",data[idx]);
+            }
+            char x[3];
+            if(i==yi-1) { x[0]=']'; x[1]='\n'; x[2]='\0'; }
+            else        { x[0]='\n';x[1]='\0'; }
+            printf("\t%s",x);
+        }
+        printf("\n");
+    }
+    return;
+}
+
+void printData(__COMPLEX_T* data, int js, int is, int ks, int xi, int yi, int zi, int xs, int ys, int zs, const char* prefix)
+{
+    printf("%sstart from %d %d %d, will print %d %d %d size (of %d %d %d)\n",prefix,js,is,ks,xi,yi,zi,xs,ys,zs);
+    for(int k=ks;k<ks+zi;++k) {
+        printf("%ssection %d\t: [\n",prefix,k);
+        for(int i=is;i<is+yi;++i) {
+            printf("%s\t",prefix);
+            for(int j=js;j<js+xi;++j) {
+                int idx = k*xs*ys+i*xs+j;
+                printf("\t(%lf,%lf)",data[idx].x,data[idx].y);
+            }
+            char x[3];
+            if(i==yi-1) { x[0]=']'; x[1]='\n'; x[2]='\0'; }
+            else        { x[0]='\n';x[1]='\0'; }
+            printf("\t%s",x);
+        }
+        printf("\n");
+    }
+    return;
 }
 
 void runTest(int argc, char **argv)
@@ -265,8 +317,81 @@ void runTest(int argc, char **argv)
     MPI_Barrier(MPI_COMM_WORLD);
     delete node;
 }
+
+void test_symmtrise(int argc, char **argv)
+{
+    MpiNode *node = new MpiNode(argc,argv);
+    node->groupInit(2); // class number 1 for testing
+    BackProjector bp(400,3,"I3");
+    BackProjector bp_reference(400,3,"I3");
+    bp.pad_size = 315;
+    bp_reference.pad_size = 315;
+    bp.r_max = 78;
+    bp_reference.r_max = 78;
+    bp.padding_factor = 2;
+    bp_reference.padding_factor = 2;
+    if(!node->isMaster()) {
+        bp.weight.reshape(bp.pad_size,bp.pad_size,bp.pad_size/2+1);
+        bp_reference.weight.reshape(bp.pad_size,bp.pad_size,bp.pad_size/2+1);
+        bp.data.reshape(bp.pad_size,bp.pad_size,bp.pad_size/2+1);
+        bp_reference.data.reshape(bp.pad_size,bp.pad_size,bp.pad_size/2+1);
+
+        bp.weight.setXmippOrigin();
+        bp_reference.weight.setXmippOrigin();
+        bp.data.setXmippOrigin();
+        bp_reference.data.setXmippOrigin();
+
+        bp.weight.xinit = 0;
+        bp_reference.weight.xinit = 0;
+        bp.data.xinit = 0;
+        bp_reference.data.xinit = 0;
+
+        // warm up gpu
+        printf("== warm up ==\n");
+        bp.symmetrise_gpu(node->rank);
+        printf("==  finish ==\n");
+        // initialise
+        init_random(bp.weight.data, NZYXSIZE(bp.weight));
+        init_random((__COMPLEX_T*)bp.data.data, NZYXSIZE(bp.data));
+        init_from(bp_reference.weight.data,bp.weight.data,NZYXSIZE(bp.weight));
+        init_from((__COMPLEX_T*)bp_reference.data.data,(__COMPLEX_T*)bp.data.data,NZYXSIZE(bp.data));
+
+        TestTimer::start();
+        bp.symmetrise_gpu(node->rank);
+        TestTimer::stop();
+        TestTimer::printTime(" OMP SYMM ");
+        TestTimer::start();
+        bp_reference.symmetrise();
+        TestTimer::stop();
+        TestTimer::printTime(" ORI SYMM ");
+
+        MPI_Barrier(node->slaveC);
+        for(int n=0;n<node->size;++n) {
+            if(n==node->rank) {
+                bool result=true;
+                printf("-- Checking weight...\n");
+                result &= validate(bp.weight.data,bp_reference.weight.data,XSIZE(bp_reference.weight),YSIZE(bp_reference.weight),ZSIZE(bp_reference.weight),"\t");
+                printf("-- Checking data...\n");
+                result &= validate((__COMPLEX_T*)bp.data.data,(__COMPLEX_T*)bp_reference.data.data,XSIZE(bp_reference.data),YSIZE(bp_reference.data),ZSIZE(bp_reference.data),"\t");
+                printData(bp.weight.data,0,155,1,5,5,1,XSIZE(bp.weight),YSIZE(bp.weight),ZSIZE(bp.weight),"\t");
+                printData(bp_reference.weight.data,0,155,1,5,5,1,XSIZE(bp.weight),YSIZE(bp.weight),ZSIZE(bp.weight),"\t");
+                printData((__COMPLEX_T*)bp.data.data,0,155,1,5,5,1,XSIZE(bp.data),YSIZE(bp.data),ZSIZE(bp.data),"\t");
+                printData((__COMPLEX_T*)bp_reference.data.data,0,155,1,5,5,1,XSIZE(bp.data),YSIZE(bp.data),ZSIZE(bp.data),"\t");
+                if(result)
+                    printf("-- All PASS...\n");
+                else
+                    printf("** CHECK FAILED **\n");
+            }
+            MPI_Barrier(node->slaveC);
+        }
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+    delete node;
+}
+
 int main(int argc, char **argv)
 {
-    runTest(argc,argv);
+    //runTest(argc,argv);
+    test_symmtrise(argc,argv);
     return 0;
 }
