@@ -23,6 +23,56 @@ __global__ void ScaleReal_kernel(RFLOAT * a, int size, RFLOAT divScale)
 	a[global_index] /= divScale;
 }
 
+__global__ void fft_transposeXY_kernel_complex(__COMPLEX_T *odata, const __COMPLEX_T *idata, int owidth, int iwidth){
+    __shared__ __COMPLEX_T tile[TILE_DIM][TILE_DIM+1];
+        
+    int x = blockIdx.x * TILE_DIM + threadIdx.x;
+    int y = blockIdx.y * TILE_DIM;
+    //int width = gridDim.x * TILE_DIM;
+
+    if(x<iwidth) {
+        for (int j = threadIdx.y; j < TILE_DIM && y+j < owidth; j += BLOCK_ROWS) {
+            tile[j][threadIdx.x] = idata[(y+j)*iwidth + x];
+        }
+    }
+
+    __syncthreads();
+
+    x = blockIdx.y * TILE_DIM + threadIdx.x;  // transpose block offset
+    y = blockIdx.x * TILE_DIM;
+    //width = gridDim.y * TILE_DIM;
+
+    if(x<owidth) {
+        for (int j = threadIdx.y; j < TILE_DIM && y+j < iwidth; j += BLOCK_ROWS)
+            odata[(y+j)*owidth + x] = tile[threadIdx.x][j];
+    }
+}
+
+__global__ void fft_transposeXY_kernel_real(RFLOAT *odata, const RFLOAT *idata, int owidth, int iwidth){
+    __shared__ RFLOAT tile[TILE_DIM][TILE_DIM+1];
+        
+    int x = blockIdx.x * TILE_DIM + threadIdx.x;
+    int y = blockIdx.y * TILE_DIM;
+    //int width = gridDim.x * TILE_DIM;
+
+    if(x<iwidth) {
+        for (int j = threadIdx.y; j < TILE_DIM && y+j < owidth; j += BLOCK_ROWS) {
+            tile[j][threadIdx.x] = idata[(y+j)*iwidth + x];
+        }
+    }
+
+    __syncthreads();
+
+    x = blockIdx.y * TILE_DIM + threadIdx.x;  // transpose block offset
+    y = blockIdx.x * TILE_DIM;
+    //width = gridDim.y * TILE_DIM;
+
+    if(x<owidth) {
+        for (int j = threadIdx.y; j < TILE_DIM && y+j < iwidth; j += BLOCK_ROWS)
+            odata[(y+j)*owidth + x] = tile[threadIdx.x][j];
+    }
+}
+
 __global__ void fft_cuda_kernel_centerFFT_2D(RFLOAT *img_in,
     int image_size,
     int xdim,

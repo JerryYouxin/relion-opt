@@ -26,6 +26,8 @@ __global__ void fft_cuda_kernel_centerFFT_3D(RFLOAT *img_in,
     int yshift,
     int zshift);
 //----------------------------------------------------------------------------
+__global__ void fft_transposeXY_kernel_complex(__COMPLEX_T *odata, const __COMPLEX_T *idata, int owidth, int iwidth);
+__global__ void fft_transposeXY_kernel_real(RFLOAT *odata, const RFLOAT *idata, int owidth, int iwidth);
 //======================================================
 void fft_runCenterFFT( CudaGlobalPtr< RFLOAT , 0 > &img_in,
 				  int xSize,

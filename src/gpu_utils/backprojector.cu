@@ -7,6 +7,8 @@
 #include "src/gpu_utils/cuda_helper_functions.cuh"
 #include <assert.h>
 
+#include <omp.h>
+
 #ifdef TIMING
 #define DTIC(timer,stamp) timer.tic(stamp)
 #define DTOC(timer,stamp) timer.toc(stamp)
@@ -206,7 +208,7 @@ void BackProjector::reconstruct_gpu(int rank,
                                 int minres_map,
                                 bool printTimes)
 {
-	if(skip_gridding) {
+	if(skip_gridding || ref_dim!=3) {
 		printf("\n=== Warning : skip_gridding did not support GPU reconstructing, will use CPU only ===\n");
 		reconstruct(
 			vol_out,
@@ -258,7 +260,8 @@ void BackProjector::reconstruct_gpu(int rank,
 #endif
 
 	DTIC(ReconTimer,ReconS_0);
-	int devCount, Xsize, Ysize, Zsize, size, YXsize;
+	int devCount;
+	size_t Xsize, Ysize, Zsize, size, YXsize;
 	cudaGetDeviceCount(&devCount);
 	int dev_id=(rank+devCount-1)%devCount;
 	DTOC(ReconTimer,ReconS_0);
@@ -268,22 +271,35 @@ void BackProjector::reconstruct_gpu(int rank,
 	MultidimArray<RFLOAT> Fweight;
 	// Fnewweight can become too large for a float: always keep this one in double-precision
 	MultidimArray<double> Fnewweight;
-	MultidimArray<Complex>& Fconv = transformer.getFourierReference();
+	//MultidimArray<Complex>& Fconv = transformer.getFourierReference();
+	MultidimArray<Complex> Fconv;
 	int max_r2 = ROUND(r_max * padding_factor) * ROUND(r_max * padding_factor);
 
     cudaStream_t stream;
     DEBUG_HANDLE_ERROR(cudaSetDevice(dev_id));
-    DEBUG_HANDLE_ERROR(cudaStreamCreate(&stream));
+	DEBUG_HANDLE_ERROR(cudaStreamCreate(&stream));
+#ifdef FORCE_NOT_USE_BUFF_FFT
 	RelionCudaFFT cutransformer(stream, NULL, ref_dim);
+#else
+	BuffCudaFFT3D cutransformer(stream);
+	bool host_splitted = false;
+#endif
 	CudaGlobalPtr<RFLOAT, false> cuFweight(stream);
 	CudaGlobalPtr<double, false> cuFnewweight(stream);
+	CudaGlobalPtr<RFLOAT, false> tabulatedValues(stream);
 
-	printf("pad_size=%d, ref_dim=%d\n",pad_size,ref_dim);
+	printf("pad_size=%d, ref_dim=%d, r_max=%d, normalise=%lf\n",pad_size,ref_dim,r_max,normalise);
 
     // Set Fweight, Fnewweight and Fconv to the right size
     if (ref_dim == 2) {
 		vol_out.setDimensions(pad_size, pad_size, 1, 1);
+		Fconv.reshape(pad_size,pad_size/2+1);
+#ifdef FORCE_NOT_USE_BUFF_FFT
 		if(cutransformer.setSize(pad_size, pad_size, 1,1,1)<0) {
+#else
+		// not supported
+		if(true) {
+#endif
 			printf("\n=== Warning : something went wrong when prepare FFT plan, use CPU instead ===\n");
 			cutransformer.clear();
 			HANDLE_ERROR(cudaDeviceSynchronize());
@@ -312,7 +328,24 @@ void BackProjector::reconstruct_gpu(int rank,
         // Too costly to actually allocate the space
         // Trick transformer with the right dimensions
 		vol_out.setDimensions(pad_size, pad_size, pad_size, 1);
+		Fconv.reshape(pad_size,pad_size,pad_size/2+1);
+#ifdef FORCE_NOT_USE_BUFF_FFT
 		if(cutransformer.setSize(pad_size, pad_size, pad_size,1,1)<0) {
+#else
+		size_t fconv_size = pad_size*pad_size*(pad_size/2+1);
+		size_t needed = cutransformer.minReq(pad_size, pad_size, pad_size,1);
+		size_t required_free = 70*1000*1000 + fconv_size*sizeof(double) + XSIZE(tab_ftblob.tabulatedValues)*sizeof(RFLOAT); // 70M free for accidents
+		size_t weight_needed = fconv_size*(sizeof(RFLOAT));
+		size_t avail, total;
+		needed += weight_needed + required_free;
+		DEBUG_HANDLE_ERROR(cudaMemGetInfo( &avail, &total ));
+		host_splitted = (avail <= needed);
+		required_free += weight_needed;
+		//weight_splitted = (avail <= needed+weight_needed);
+		//printf("cutrans minimal need=%ld, total need=%ld, avail=%ld\n",cutransformer.minReq(pad_size, pad_size, pad_size,1), needed, avail);
+		if(host_splitted) printf("will try HOST bufferring for reconstruction\n");
+		if(cutransformer.setSize(pad_size, pad_size, pad_size,1,required_free,host_splitted)<0) {
+#endif
 			printf("\n=== Warning : something went wrong when prepare FFT plan, use CPU instead ===\n");
 			cutransformer.clear();
 			HANDLE_ERROR(cudaDeviceSynchronize());
@@ -338,7 +371,23 @@ void BackProjector::reconstruct_gpu(int rank,
 		}
 	}
 
-    transformer.setReal(vol_out); // Fake set real. 1. Allocate space for Fconv 2. calculate plans.
+	cutransformer.setPlan();
+	size_t fxsize = XSIZE(Fconv);
+	size_t fysize = YSIZE(Fconv);
+	size_t fxysize= fxsize*fysize;
+	size_t fzsize = ZSIZE(Fconv);
+	size_t fsize  = fxysize*fzsize;
+	cuFweight.setSize(fsize);
+	cuFnewweight.setSize(fsize);
+	tabulatedValues.setSize(XSIZE(tab_ftblob.tabulatedValues));
+	cuFweight.device_alloc();
+	LAUNCH_HANDLE_ERROR(cudaGetLastError());
+	cuFnewweight.device_alloc();
+	LAUNCH_HANDLE_ERROR(cudaGetLastError());
+	tabulatedValues.device_alloc();
+	LAUNCH_HANDLE_ERROR(cudaGetLastError());
+
+	//transformer.setReal(vol_out); // Fake set real. 1. Allocate space for Fconv 2. calculate plans.
     vol_out.clear(); // Reset dimensions to 0
 
     DTOC(ReconTimer,ReconS_1);
@@ -371,7 +420,6 @@ void BackProjector::reconstruct_gpu(int rank,
 			DIRECT_A1D_ELEM(counter, ires) += 1.;
 		}
 	}
-
 	// Average (inverse of) sigma2 in reconstruction
 	FOR_ALL_DIRECT_ELEMENTS_IN_ARRAY1D(sigma2)
 	{
@@ -385,7 +433,6 @@ void BackProjector::reconstruct_gpu(int rank,
 			REPORT_ERROR("BackProjector::reconstruct: ERROR: unexpectedly small, yet non-zero sigma2 value, this should not happen...a");
 		}
 	}
-
 	if (update_tau2_with_fsc)
 	{
 		tau2.reshape(ori_size/2 + 1);
@@ -501,7 +548,6 @@ void BackProjector::reconstruct_gpu(int rank,
 		}
 
 	} //end if do_map
-
     DTOC(ReconTimer,ReconS_2);
 	if (skip_gridding)
 	{
@@ -550,13 +596,7 @@ void BackProjector::reconstruct_gpu(int rank,
 
 		RFLOAT normftblob = tab_ftblob(0.);
         RFLOAT orixpad = ori_size*padding_factor;
-		// bool useCPU=false;
-		// bool useSplit = false;
         if(ref_dim==2) {
-            // if(cutransformer.setSize(pad_size, pad_size, 1,1)<0) {
-			// 	useCPU=true;
-			// 	useSplit=true;
-			// }
             Xsize = pad_size;
             Ysize = pad_size;
             Zsize = 1;
@@ -564,133 +604,119 @@ void BackProjector::reconstruct_gpu(int rank,
             YXsize=size;
         }
         else {
-            // if(cutransformer.setSize(pad_size, pad_size, pad_size,1,1)<0) {
-			// 	REPORT_ERROR("Something went wrong");
-			// }
             Xsize = pad_size;
             Ysize = pad_size;
             Zsize = pad_size;
             YXsize= pad_size*pad_size;
             size = YXsize*pad_size;
-        }
-
-		int blknum=(size + BLOCK_SIZE - 1) / BLOCK_SIZE;
-		int padhdim = pad_size / 2;
-		int fxsize = XSIZE(Fconv);
-		int fysize = YSIZE(Fconv);
-		int fxysize= fxsize*fysize;
-		int fzsize = ZSIZE(Fconv);
-		int fsize  = fxysize*fzsize;
-		assert(fxsize==(pad_size/2+1));
-		assert(fysize==pad_size);
-		assert(fzsize==((ref_dim == 2) ? 1 : pad_size));
-		assert(false);
-		CudaGlobalPtr<RFLOAT, false> tabulatedValues(stream);
-		cuFweight.h_ptr=Fweight.data;
-		cuFweight.setSize(fsize);
-		cuFnewweight.setSize(fsize);
-		cuFnewweight.h_ptr=Fnewweight.data;
-		tabulatedValues.h_ptr=tab_ftblob.tabulatedValues.data;
-		tabulatedValues.setSize(XSIZE(tab_ftblob.tabulatedValues));
-		cuFweight.device_alloc();
-		cuFnewweight.device_alloc();
-		tabulatedValues.device_alloc();
-		assert(sizeof(Complex)==sizeof(__COMPLEX_T));
-		cuFweight.cp_to_device();
-		cuFnewweight.cp_to_device();
-		tabulatedValues.cp_to_device();
-		DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
-		for (int iter = 0; iter < max_iter_preweight; iter++)
-		{
-			DTIC(ReconTimer,ReconS_6);
-			// Set Fnewweight * Fweight in the transformer
-			// In Matej et al (2001), weights w_P^i are convoluted with the kernel,
-			// and the initial w_P^0 are 1 at each sampling point
-			// Here the initial weights are also 1 (see initialisation Fnewweight above),
-			// but each "sampling point" counts "Fweight" times!
-			// That is why Fnewweight is multiplied by Fweight prior to the convolution
-			initFconvKernel<<<blknum,BLOCK_SIZE,0,stream>>>(~cutransformer.fouriers,~cuFnewweight,~cuFweight,fsize);
-			LAUNCH_HANDLE_ERROR(cudaGetLastError());
-			DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
-			// convolute through Fourier-transform (as both grids are rectangular)
-			// Note that convoluteRealSpace acts on the complex array inside the transformer
-			// do_mask = false
-			cutransformer.clearPlan();
-			cutransformer.direction=1;
-			cutransformer.setPlan();
-			cutransformer.backward();
-			DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
-			multFTBlobKernel_noMask<<<blknum,BLOCK_SIZE,0,stream>>>(~(cutransformer.reals), 
-						size, YXsize, Xsize, Ysize,
-						padhdim,pad_size,padding_factor,
-						orixpad,
-						normftblob,tab_ftblob.sampling,
-						~tabulatedValues,XSIZE(tab_ftblob.tabulatedValues));
-			LAUNCH_HANDLE_ERROR(cudaGetLastError());
-			DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
-			cutransformer.clearPlan();
-			cutransformer.direction=-1;
-			cutransformer.setPlan();
-			cutransformer.forward();
-			DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
-			ScaleComplexPointwise_kernel <<< blknum, BLOCK_SIZE,0,stream>>>(~cutransformer.fouriers, fsize, size);
-			DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
-			LAUNCH_HANDLE_ERROR(cudaGetLastError());
-
-			divFconvKernel<<<blknum,BLOCK_SIZE,0,stream>>>(~cutransformer.fouriers,~cuFnewweight,max_r2,fsize,fxysize,fxsize,fysize,fzsize);
-			LAUNCH_HANDLE_ERROR(cudaGetLastError());
-			DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
-			DTOC(ReconTimer,ReconS_6);
 		}
-		cuFnewweight.cp_to_host();
-		cutransformer.clearPlan();
-		DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
-		LAUNCH_HANDLE_ERROR(cudaGetLastError());
-		cuFweight.free_if_set();
-		tabulatedValues.free_if_set();
-        DTOC(ReconTimer,ReconS_25);
+		if(host_splitted) {
+			printf("*=============== Enter host_splitted ====================*\n");
+			REPORT_ERROR("Not implemented");
+			DTOC(ReconTimer,ReconS_7);
+		} else {
+			size_t blknum=(size + BLOCK_SIZE - 1) / BLOCK_SIZE;
+			size_t padhdim = pad_size / 2;
+			cuFweight.h_ptr=Fweight.data;
+			cuFnewweight.h_ptr=Fnewweight.data;
+			tabulatedValues.h_ptr=tab_ftblob.tabulatedValues.data;
+			LAUNCH_HANDLE_ERROR(cudaGetLastError());
+			cuFweight.cp_to_device();
+			cuFnewweight.cp_to_device();
+			tabulatedValues.cp_to_device();
+			DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
+			LAUNCH_HANDLE_ERROR(cudaGetLastError());
+			for (int iter = 0; iter < max_iter_preweight; iter++)
+			{
+				DTIC(ReconTimer,ReconS_6);
+				// Set Fnewweight * Fweight in the transformer
+				// In Matej et al (2001), weights w_P^i are convoluted with the kernel,
+				// and the initial w_P^0 are 1 at each sampling point
+				// Here the initial weights are also 1 (see initialisation Fnewweight above),
+				// but each "sampling point" counts "Fweight" times!
+				// That is why Fnewweight is multiplied by Fweight prior to the convolution
+				initFconvKernel<<<blknum,BLOCK_SIZE,0,stream>>>(~cutransformer.fouriers,~cuFnewweight,~cuFweight,fsize);
+				LAUNCH_HANDLE_ERROR(cudaGetLastError());
+				DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
+				// convolute through Fourier-transform (as both grids are rectangular)
+				// Note that convoluteRealSpace acts on the complex array inside the transformer
+				// do_mask = false
+				cutransformer.clearPlan();
+				cutransformer.direction=1;
+				cutransformer.setPlan();
+				cutransformer.backward();
+				DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
+				multFTBlobKernel_noMask<<<blknum,BLOCK_SIZE,0,stream>>>(~(cutransformer.reals), 
+							size, YXsize, Xsize, Ysize,
+							padhdim,pad_size,padding_factor,
+							orixpad,
+							normftblob,tab_ftblob.sampling,
+							~tabulatedValues,XSIZE(tab_ftblob.tabulatedValues));
+				LAUNCH_HANDLE_ERROR(cudaGetLastError());
+				DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
+				cutransformer.clearPlan();
+				cutransformer.direction=-1;
+				cutransformer.setPlan();
+				cutransformer.forward();
+				DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
+				ScaleComplexPointwise_kernel <<< blknum, BLOCK_SIZE,0,stream>>>(~cutransformer.fouriers, fsize, size);
+				DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
+				LAUNCH_HANDLE_ERROR(cudaGetLastError());
+				divFconvKernel<<<blknum,BLOCK_SIZE,0,stream>>>(~cutransformer.fouriers,~cuFnewweight,max_r2,fsize,fxysize,fxsize,fysize,fzsize);
+				LAUNCH_HANDLE_ERROR(cudaGetLastError());
+				DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
+				DTOC(ReconTimer,ReconS_6);
+			}
+			cuFnewweight.cp_to_host();
+			cutransformer.clearPlan();
+			DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
+			LAUNCH_HANDLE_ERROR(cudaGetLastError());
+			cuFweight.free_if_set();
+			tabulatedValues.free_if_set();
+			DTOC(ReconTimer,ReconS_25);
 
-		DTIC(ReconTimer,ReconS_7);
-		// Clear memory
-		Fweight.clear();
-		cutransformer.reals.free_if_set();
+			DTIC(ReconTimer,ReconS_7);
+			// Clear memory
+			Fweight.clear();
+			cutransformer.reals.free_if_set();
 
-		// Note that Fnewweight now holds the approximation of the inverse of the weights on a regular grid
+			// Note that Fnewweight now holds the approximation of the inverse of the weights on a regular grid
 
-		// Now do the actual reconstruction with the data array
-		// Apply the iteratively determined weight
-		//Fconv.initZeros(); // to remove any stuff from the input volume
-		CudaGlobalPtr<__COMPLEX_T, 0> cudata(stream);
-		cudata.setSize(NZYXSIZE(data));
-		cudata.device_alloc();
-		cudata.host_alloc();
-		FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(data)
-		{
-			cudata[n].x = data.data[n].real;
-			cudata[n].y = data.data[n].imag;
-		}
-		cudata.cp_to_device();
-		cudata.streamSync();
-		decenter_gpu(~cudata,
-					 ~cutransformer.fouriers,
-					 ~cuFnewweight, 
-					 max_r2, 
-					 XSIZE(Fconv),
-					 YSIZE(Fconv),
-					 ZSIZE(Fconv),
-					 XSIZE(data),
-					 YSIZE(data),
-					 STARTINGX(data),
-					 STARTINGY(data),
-					 STARTINGZ(data),
-					 stream);
-		DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
-		LAUNCH_HANDLE_ERROR(cudaGetLastError());
-		cudata.free_if_set();
-		cuFnewweight.free_if_set();
-		// Clear memory
-		Fnewweight.clear();
-		DTOC(ReconTimer,ReconS_7);
+			// Now do the actual reconstruction with the data array
+			// Apply the iteratively determined weight
+			//Fconv.initZeros(); // to remove any stuff from the input volume
+			CudaGlobalPtr<__COMPLEX_T, 0> cudata(stream);
+			cudata.setSize(NZYXSIZE(data));
+			cudata.device_alloc();
+			cudata.host_alloc();
+			FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(data)
+			{
+				cudata[n].x = data.data[n].real;
+				cudata[n].y = data.data[n].imag;
+			}
+			cudata.cp_to_device();
+			cudata.streamSync();
+			decenter_gpu(~cudata,
+						~cutransformer.fouriers,
+						~cuFnewweight, 
+						max_r2, 
+						XSIZE(Fconv),
+						YSIZE(Fconv),
+						ZSIZE(Fconv),
+						XSIZE(data),
+						YSIZE(data),
+						STARTINGX(data),
+						STARTINGY(data),
+						STARTINGZ(data),
+						stream);
+			DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
+			LAUNCH_HANDLE_ERROR(cudaGetLastError());
+			cudata.free_if_set();
+			cuFnewweight.free_if_set();
+			// Clear memory
+			Fnewweight.clear();
+			DTOC(ReconTimer,ReconS_7);
+		} // end host_splitted
 	} // end if skip_gridding
 
 	// rather than doing the blob-convolution to downsample the data array, do a windowing operation:
@@ -707,7 +733,7 @@ void BackProjector::reconstruct_gpu(int rank,
 	// Pass the transformer to prevent making and clearing a new one before clearing the one declared above....
 	// The latter may give memory problems as detected by electric fence....
 	DTIC(ReconTimer,ReconS_17);
-	windowToOridimRealSpace_gpu(rank,transformer,&cutransformer, vol_out, nr_threads, printTimes);
+	windowToOridimRealSpace_gpu(rank,transformer,&cutransformer, vol_out, nr_threads, printTimes, host_splitted);
 	transformer.fReal=NULL;
 	Fconv.clear();
 	DTOC(ReconTimer,ReconS_17);
@@ -733,7 +759,7 @@ void BackProjector::reconstruct_gpu(int rank,
 	int zinit = FIRST_XMIPP_INDEX(ZSIZE(vol_out));
 	int yinit = FIRST_XMIPP_INDEX(YSIZE(vol_out));
 	int xinit = FIRST_XMIPP_INDEX(XSIZE(vol_out));
-	int data_size = NZYXSIZE(vol_out);
+	size_t data_size = NZYXSIZE(vol_out);
     dim3 dimBlock(BLOCK_SIZE, 1, 1);
 	dim3 dimGrid((data_size + BLOCK_SIZE - 1) / BLOCK_SIZE, 1, 1);
 	HANDLE_ERROR(cudaGetLastError());
@@ -759,7 +785,7 @@ void BackProjector::reconstruct_gpu(int rank,
                                                          zinit,
                                                          padoridim);
 	}
-    HANDLE_ERROR(cudaGetLastError());
+	HANDLE_ERROR(cudaGetLastError());
     vol_out.setXmippOrigin();
 	cutransformer.reals.streamSync();
 	cutransformer.reals.cp_to_host();
@@ -833,7 +859,7 @@ void BackProjector::reconstruct_gpu(int rank,
 
 }
 
-void BackProjector::windowToOridimRealSpace_gpu(int rank, FourierTransformer &transformer, void* _transformer, MultidimArray<RFLOAT> &Mout, int nr_threads, bool printTimes)
+void BackProjector::windowToOridimRealSpace_gpu(int rank, FourierTransformer &transformer, void* _transformer, MultidimArray<RFLOAT> &Mout, int nr_threads, bool printTimes, bool host_splitted)
 {
 
 #ifdef TIMING
@@ -851,14 +877,22 @@ void BackProjector::windowToOridimRealSpace_gpu(int rank, FourierTransformer &tr
 #endif
 	DTIC(OriDimTimer,OriDim1);
 	int Xsize, Ysize, Zsize, size, YXsize, iXsize, iYsize, iZsize;
+#ifdef FORCE_NOT_USE_BUFF_FFT
 	RelionCudaFFT* cutransformer = (RelionCudaFFT*)_transformer;
+#else
+	BuffCudaFFT3D* cutransformer = (BuffCudaFFT3D*)_transformer;
+#endif
 	cudaStream_t stream = cutransformer->fouriers.getStream();
 	CudaGlobalPtr<__COMPLEX_T, 0> Ftmp(stream);
-	Ftmp.setSize(cutransformer->fouriers.getSize());
-	Ftmp.d_ptr=cutransformer->fouriers.d_ptr;
-	Ftmp.d_do_free=true;
-	cutransformer->fouriers.d_do_free=false;
-	cutransformer->fouriers.d_ptr = NULL;
+	if(host_splitted) {
+		REPORT_ERROR("Host splitted Not implemented");
+	} else {
+		Ftmp.setSize(cutransformer->fouriers.getSize());
+		Ftmp.d_ptr=cutransformer->fouriers.d_ptr;
+		Ftmp.d_do_free=true;
+		cutransformer->fouriers.d_do_free=false;
+		cutransformer->fouriers.d_ptr = NULL;
+	}
 	cutransformer->clear();
 	DTOC(OriDimTimer,OriDim1);
 	DTIC(OriDimTimer,OriDim2);
@@ -870,7 +904,11 @@ void BackProjector::windowToOridimRealSpace_gpu(int rank, FourierTransformer &tr
 	if (ref_dim == 2)
 	{
 		// only backward
+#ifdef FORCE_NOT_USE_BUFF_FFT
 		if(cutransformer->setSize(padoridim,padoridim,1,1,1)<0)
+#else
+		if(true)
+#endif
 		{
 			CRITICAL("TOO LARGE 2D");
 		}
@@ -884,7 +922,11 @@ void BackProjector::windowToOridimRealSpace_gpu(int rank, FourierTransformer &tr
 	else
 	{
 		// only backward
+#ifdef FORCE_NOT_USE_BUFF_FFT
 		if(cutransformer->setSize(padoridim,padoridim,padoridim,1,1)<0)
+#else
+		if(cutransformer->setSize(padoridim,padoridim,padoridim,1,-(sizeof(RFLOAT)*2*Ftmp.getSize()))<0)
+#endif
 		{
 			CRITICAL("TOO LARGE 3D");
 		}
@@ -899,6 +941,7 @@ void BackProjector::windowToOridimRealSpace_gpu(int rank, FourierTransformer &tr
 	cutransformer->fouriers.streamSync();
 	LAUNCH_HANDLE_ERROR(cudaGetLastError());
 	Ftmp.free_if_set();
+	cutransformer->setPlan(); // make sure there are enough memory for plan
 	DTOC(OriDimTimer,OriDim2);
 	DTIC(OriDimTimer,OriDim3);
  	if (ref_dim == 2)
@@ -930,6 +973,8 @@ void BackProjector::windowToOridimRealSpace_gpu(int rank, FourierTransformer &tr
 	DTIC(OriDimTimer,OriDim5);
 	cutransformer->backward();
 	cutransformer->reals.streamSync();
+	LAUNCH_HANDLE_ERROR(cudaGetLastError());
+	cutransformer->clearPlan(); // clear plan
 	LAUNCH_HANDLE_ERROR(cudaGetLastError());
 	DTOC(OriDimTimer,OriDim5);
 	Mout.setXmippOrigin();

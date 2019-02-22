@@ -311,7 +311,7 @@ public:
 	void applyHelicalSymmetry_gpu(int nr_helical_asu = 1, RFLOAT helical_twist = 0., RFLOAT helical_rise = 0.);
 	void applyPointGroupSymmetry_gpu(int rank);
 
-	void windowToOridimRealSpace_gpu(int rank, FourierTransformer &transformer, void* _transformer, MultidimArray<RFLOAT> &Mout, int nr_threads, bool printTimes);
+	void windowToOridimRealSpace_gpu(int rank, FourierTransformer &transformer, void* _transformer, MultidimArray<RFLOAT> &Mout, int nr_threads, bool printTimes, bool host_splitted);
 	void reconstruct_gpu(int rank,
 					 MultidimArray<RFLOAT> &vol_out,
                      int max_iter_preweight,

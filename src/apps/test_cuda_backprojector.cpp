@@ -12,6 +12,8 @@
 #include "src/gpu_utils/cuda_fft.h"
 #endif
 
+#include <omp.h>
+
 #include "src/backprojector_mpi.h"
 #include <time.h>
 
@@ -57,6 +59,13 @@ void init_random(RFLOAT* A, int size)
     }
 }
 
+void init_random(RFLOAT* A, int size, RFLOAT min)
+{
+    for(int i=0;i<size;++i) {
+        A[i] = frand(min,min+2);
+    }
+}
+
 void init_random(__COMPLEX_T* A, int size)
 {
     init_random((RFLOAT*)A,2*size);
@@ -81,7 +90,7 @@ bool validate(RFLOAT* opt, RFLOAT* ref, int xs, int ys, int zs, const char* pref
                 int idx = k*xs*ys+i*xs+j;
                 double err = fabs(opt[idx]-ref[idx]);
                 if(err>1e-4) {
-                    printf("%s** Error at %d %d %d : %lf(opt) vs %lf(ref), err=%lf\n",prefix,k,i,j,opt[idx],ref[idx],err);
+                    printf("%s** Error at %d %d %d : %lf(opt) vs %lf(ref), err=%lf\n",prefix,j,i,k,opt[idx],ref[idx],err);
                     return false;
                 }
                 sum += err;
@@ -101,7 +110,7 @@ bool validate(__COMPLEX_T* opt, __COMPLEX_T* ref, int xs, int ys, int zs, const 
                 int idx = k*xs*ys+i*xs+j;
                 double err = fabs(opt[idx].x-ref[idx].x) + fabs(opt[idx].y-ref[idx].y);
                 if(err>1e-4) {
-                    printf("%s** Error at %d %d %d : %lf %lf(opt) vs %lf %lf(ref), err=%lf\n",prefix,k,i,j,opt[idx].x,opt[idx].y,ref[idx].x,ref[idx].y,err);
+                    printf("%s** Error at %d %d %d : %lf %lf(opt) vs %lf %lf(ref), err=%lf\n",prefix,j,i,k,opt[idx].x,opt[idx].y,ref[idx].x,ref[idx].y,err);
                     return false;
                 }
                 sum += err;
@@ -156,15 +165,21 @@ void printData(__COMPLEX_T* data, int js, int is, int ks, int xi, int yi, int zi
 
 void runTest(int argc, char **argv)
 {
+    omp_set_num_threads(28);
     MpiNode *node = new MpiNode(argc,argv);
     node->groupInit(2); // class number 1 for testing
-    BackProjector bp(256,3,"c1");
-    BackProjector bp_reference(256,3,"c1");
-    bp.pad_size = 263;
-    bp_reference.pad_size = 263;
+    BackProjector bp(400,3,"c1");
+    BackProjector bp_reference(400,3,"c1");
+    bp.pad_size = 803;
+    bp_reference.pad_size = 803;
 
-    bp.r_max = 65;
-    bp_reference.r_max = 65;
+    bp.r_max = 200;
+    bp_reference.r_max = 200;
+    // bp.pad_size = 615;
+    // bp_reference.pad_size = 615;
+
+    // bp.r_max = 200;
+    // bp_reference.r_max = 200;
     if(!node->isMaster()) {
         RFLOAT tau2_fudge = 1.0;
         int max_iter_preweight = 10;
@@ -221,28 +236,44 @@ void runTest(int argc, char **argv)
         bp_reference.weight.xinit = 0;
         bp.data.xinit = 0;
         bp_reference.data.xinit = 0;
-        printf("## INFO: reading input data\n");
-        char fn[200];
-        sprintf(fn, "reconstruct_initial_weight.%d.spi",node->rank);
-        bp.weight.readBinary(fn);
-        bp_reference.weight.readBinary(fn);
-        sprintf(fn, "reconstruct_initial_data.%d.spi",node->rank);
-        bp.data.readBinary(fn);
-        bp_reference.data.readBinary(fn);
-        sprintf(fn, "reconstruct_initial_fsc.%d.spi",node->rank);
-        fsc.readBinary(fn);
-        sprintf(fn, "reconstruct_initial_tau2.%d.spi",node->rank);
-        tau2.readBinary(fn);
-        tau2_reference.readBinary(fn);
-        sprintf(fn, "reconstruct_initial_sigma2.%d.spi",node->rank);
-        sigma2.readBinary(fn);
-        sigma2_reference.readBinary(fn);
-        sprintf(fn, "reconstruct_initial_data_vs_prior.%d.spi",node->rank);
-        evidence_vs_prior.readBinary(fn);
-        evidence_vs_prior_reference.readBinary(fn);
-        sprintf(fn, "reconstruct_initial_fourier_coverage.%d.spi",node->rank);
-        fourier_coverage.readBinary(fn);
-        fourier_coverage_reference.readBinary(fn);
+        if(false) {
+            printf("## INFO: reading input data\n");
+            char fn[200];
+            sprintf(fn, "reconstruct_initial_weight.%d.spi",node->rank);
+            bp.weight.readBinary(fn);
+            bp_reference.weight.readBinary(fn);
+            sprintf(fn, "reconstruct_initial_data.%d.spi",node->rank);
+            bp.data.readBinary(fn);
+            bp_reference.data.readBinary(fn);
+            sprintf(fn, "reconstruct_initial_fsc.%d.spi",node->rank);
+            fsc.readBinary(fn);
+            sprintf(fn, "reconstruct_initial_tau2.%d.spi",node->rank);
+            tau2.readBinary(fn);
+            tau2_reference.readBinary(fn);
+            sprintf(fn, "reconstruct_initial_sigma2.%d.spi",node->rank);
+            sigma2.readBinary(fn);
+            sigma2_reference.readBinary(fn);
+            sprintf(fn, "reconstruct_initial_data_vs_prior.%d.spi",node->rank);
+            evidence_vs_prior.readBinary(fn);
+            evidence_vs_prior_reference.readBinary(fn);
+            sprintf(fn, "reconstruct_initial_fourier_coverage.%d.spi",node->rank);
+            fourier_coverage.readBinary(fn);
+            fourier_coverage_reference.readBinary(fn);
+        } else {
+            init_random(bp.weight.data,NZYXSIZE(bp.weight),0);
+            init_random((__COMPLEX_T*)bp.data.data,NZYXSIZE(bp.data));
+            init_random(fsc.data,NZYXSIZE(fsc));
+            init_random(tau2.data,NZYXSIZE(tau2));
+            init_random(sigma2.data,NZYXSIZE(sigma2));
+            init_random(evidence_vs_prior.data,NZYXSIZE(evidence_vs_prior));
+            init_random(fourier_coverage.data,NZYXSIZE(fourier_coverage));
+            init_from(bp_reference.weight.data,bp.weight.data,NZYXSIZE(bp.weight));
+            init_from((__COMPLEX_T*)bp_reference.data.data,(__COMPLEX_T*)bp.data.data,NZYXSIZE(bp.data));
+            init_from(tau2_reference.data,tau2.data,NZYXSIZE(tau2));
+            init_from(sigma2_reference.data,sigma2.data,NZYXSIZE(sigma2));
+            init_from(evidence_vs_prior_reference.data,evidence_vs_prior.data,NZYXSIZE(evidence_vs_prior));
+            init_from(fourier_coverage_reference.data,fourier_coverage.data,NZYXSIZE(fourier_coverage));
+        }
         if(node->grp_rank==0) {
             printf("## INFO: mpi reconstruct\n");
             TestTimer::start();
@@ -389,9 +420,221 @@ void test_symmtrise(int argc, char **argv)
     delete node;
 }
 
+void test_forward(int argc, char **argv)
+{
+    MpiNode *node = new MpiNode(argc,argv);
+    const int X = 803;
+    const int Y = 803;
+    const int Z = 803;
+    const int FX= X/2+1;
+    const int SIZE = X*Y*Z;
+    const int FSIZE=FX*Y*Z;
+    if(node->isMaster()) {
+        printf("Will Test FFT for size (%d %d %d)\n",X,Y,Z);
+    } else {
+        int devCount;
+        cudaStream_t stream;
+        cudaGetDeviceCount(&devCount);
+        int dev_id=node->rank%devCount;
+	    HANDLE_ERROR(cudaSetDevice(dev_id));
+        HANDLE_ERROR(cudaStreamCreate(&stream));
+        RelionCudaFFT cudaFFT(stream, NULL, 3);
+        BuffCudaFFT3D cachedCudaFFT(stream);
+        RFLOAT* input = new RFLOAT[SIZE];
+        __COMPLEX_T* output = new __COMPLEX_T[FSIZE];
+        __COMPLEX_T* reference = new __COMPLEX_T[FSIZE];
+        init_random(input,SIZE);
+        // begin ori cudaFFT
+        TestTimer::start();
+        int ori = cudaFFT.setSize(X,Y,Z,1,-1);
+        if(ori!=0) {
+            printf("** ORI cudaFFT could not get plans! skip it\n");
+            goto CACHED;
+        }
+        TestTimer::stop();
+        TestTimer::printTime(" cudaFFT setSize ");
+        TestTimer::start();
+        cudaFFT.reals.h_ptr = input;
+        cudaFFT.reals.cp_to_device();
+        cudaFFT.reals.streamSync();
+        TestTimer::stop();
+        TestTimer::printTime(" cudaFFT set input data ");
+        TestTimer::start();
+        cudaFFT.forward();
+        cudaFFT.fouriers.streamSync();
+        TestTimer::stop();
+        TestTimer::printTime(" cudaFFT forward ");
+        TestTimer::start();
+        cudaFFT.fouriers.h_ptr = reference;
+        cudaFFT.fouriers.cp_to_host();
+        cudaFFT.fouriers.streamSync();
+        TestTimer::stop();
+        TestTimer::printTime(" cudaFFT copy result back ");
+        cudaFFT.clear();
+CACHED:
+        TestTimer::start();
+        int opt = cachedCudaFFT.setSize(X,Y,Z,-1,false,true); // force split
+        if(opt!=0) {
+            printf("** CACHED cudaFFT could not get plans! skip it\n");
+            goto CHECK;
+        }
+        TestTimer::stop();
+        TestTimer::printTime(" cachedCudaFFT setSize ");
+        TestTimer::start();
+        cachedCudaFFT.reals.h_ptr = input;
+        cachedCudaFFT.reals.cp_to_device();
+        cachedCudaFFT.reals.streamSync();
+        TestTimer::stop();
+        TestTimer::printTime(" cachedCudaFFT set input data ");
+        TestTimer::start();
+        cachedCudaFFT.forward();
+        cachedCudaFFT.fouriers.streamSync();
+        TestTimer::stop();
+        TestTimer::printTime(" cachedCudaFFT forward ");
+        TestTimer::start();
+        cachedCudaFFT.fouriers.h_ptr = output;
+        cachedCudaFFT.fouriers.cp_to_host();
+        cachedCudaFFT.fouriers.streamSync();
+        TestTimer::stop();
+        TestTimer::printTime(" cachedCudaFFT copy result back ");
+        cachedCudaFFT.clear();
+CHECK:
+        MPI_Barrier(node->slaveC);
+        for(int n=0;n<node->size;++n) {
+            if(n==node->rank && ori==0 && opt==0) {
+                bool result=true;
+                printf("-- Checking output...\n");
+                result &= validate(output,reference,FX,Y,Z,"\t");
+                if(result)
+                    printf("-- All PASS...\n");
+                else
+                    printf("** CHECK FAILED **\n");
+            }
+            MPI_Barrier(node->slaveC);
+        }
+END:
+        delete[] input;
+        delete[] output;
+        delete[] reference;
+        HANDLE_ERROR(cudaDeviceReset());
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+    delete node;
+}
+
+void test_backward(int argc, char **argv)
+{
+    MpiNode *node = new MpiNode(argc,argv);
+    const int X = 315;
+    const int Y = 315;
+    const int Z = 315;
+    const int FX= X/2+1;
+    const int SIZE = X*Y*Z;
+    const int FSIZE=FX*Y*Z;
+    if(node->isMaster()) {
+        printf("Will Test FFT for size (%d %d %d)\n",X,Y,Z);
+    } else {
+        int devCount;
+        cudaStream_t stream;
+        cudaGetDeviceCount(&devCount);
+        int dev_id=node->rank%devCount;
+	    HANDLE_ERROR(cudaSetDevice(dev_id));
+        HANDLE_ERROR(cudaStreamCreate(&stream));
+        RelionCudaFFT cudaFFT(stream, NULL, 3);
+        BuffCudaFFT3D cachedCudaFFT(stream);
+        __COMPLEX_T* input = new __COMPLEX_T[FSIZE];
+        RFLOAT* output = new RFLOAT[SIZE];
+        RFLOAT* reference = new RFLOAT[SIZE];
+        init_random(input,FSIZE);
+        // begin ori cudaFFT
+        TestTimer::start();
+        int ori = cudaFFT.setSize(X,Y,Z,1,1);
+        if(ori!=0) {
+            printf("** ORI cudaFFT could not get plans! skip it\n");
+            goto CACHED;
+        }
+        TestTimer::stop();
+        TestTimer::printTime(" cudaFFT setSize ");
+        TestTimer::start();
+        cudaFFT.fouriers.h_ptr = input;
+        cudaFFT.fouriers.cp_to_device();
+        cudaFFT.fouriers.streamSync();
+        TestTimer::stop();
+        TestTimer::printTime(" cudaFFT set input data ");
+        TestTimer::start();
+        cudaFFT.backward();
+        cudaFFT.reals.streamSync();
+        TestTimer::stop();
+        TestTimer::printTime(" cudaFFT backward ");
+        TestTimer::start();
+        cudaFFT.reals.h_ptr = reference;
+        cudaFFT.reals.cp_to_host();
+        cudaFFT.reals.streamSync();
+        TestTimer::stop();
+        TestTimer::printTime(" cudaFFT copy result back ");
+        printData(cudaFFT.reals.h_ptr,104,104,208,5,5,3,315,315,315,"\t");
+        cudaFFT.clear();
+CACHED:
+        TestTimer::start();
+        //int opt = cachedCudaFFT.setSize(X,Y,Z,1,false,true); // force split
+        int opt = cachedCudaFFT.setSize(X,Y,Z,1,true,true); // force split
+        if(opt!=0) {
+            printf("** CACHED cudaFFT could not get plans! skip it\n");
+            goto CHECK;
+        }
+        TestTimer::stop();
+        TestTimer::printTime(" cachedCudaFFT setSize ");
+        TestTimer::start();
+        cachedCudaFFT.fouriers.h_ptr = input;
+        cachedCudaFFT.reals.h_ptr = output;
+        // cachedCudaFFT.fouriers.cp_to_device();
+        // cachedCudaFFT.fouriers.streamSync();
+        TestTimer::stop();
+        TestTimer::printTime(" cachedCudaFFT set input data ");
+        TestTimer::start();
+        cachedCudaFFT.backward();
+        cachedCudaFFT.reals.streamSync();
+        TestTimer::stop();
+        TestTimer::printTime(" cachedCudaFFT backward ");
+        TestTimer::start();
+        // cachedCudaFFT.reals.h_ptr = output;
+        // cachedCudaFFT.reals.cp_to_host();
+        // cachedCudaFFT.reals.streamSync();
+        TestTimer::stop();
+        TestTimer::printTime(" cachedCudaFFT copy result back ");
+        printData(cachedCudaFFT.reals.h_ptr,104,104,207,5,5,5,315,315,315,"\t");
+        printData(cachedCudaFFT.reals.h_ptr,0,0,103,5,5,5,315,315,315,"\t");
+        cachedCudaFFT.clear();
+CHECK:
+        MPI_Barrier(node->slaveC);
+        for(int n=0;n<node->size;++n) {
+            if(n==node->rank && ori==0 && opt==0) {
+                bool result=true;
+                printf("-- Checking output...\n");
+                result &= validate(output,reference,X,Y,Z,"\t");
+                if(result)
+                    printf("-- All PASS...\n");
+                else
+                    printf("** CHECK FAILED **\n");
+            }
+            MPI_Barrier(node->slaveC);
+        }
+END:
+        delete[] input;
+        delete[] output;
+        delete[] reference;
+        HANDLE_ERROR(cudaDeviceReset());
+    }
+    MPI_Barrier(MPI_COMM_WORLD);
+    delete node;
+}
+
 int main(int argc, char **argv)
 {
-    //runTest(argc,argv);
-    test_symmtrise(argc,argv);
+    omp_set_num_threads(28);
+    runTest(argc,argv);
+    //test_symmtrise(argc,argv);
+    //test_forward(argc,argv);
+    //test_backward(argc,argv);
     return 0;
 }

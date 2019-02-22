@@ -81,7 +81,8 @@ void MpiNode::groupInit(int tcn, int bgrp, bool do_split_random_halves)
         if(!do_split_random_halves) {
             cls_rank = slaveRank / grp_size + 1; // this node only handle (n * cls_rank)-th class's data (n=1,...,tcn/cls_size)
             MPI_Comm_split(slaveC, cls_rank, slaveRank, &groupC);
-            rnd_rank = randC = 0; // this will not use in this case
+            rnd_rank = 0;
+            randC = MPI_COMM_WORLD; // this will not use in this case
         } else {
             int rnd  = slaveRank % 2; // odd rank is one radom half and the even rank is the other random half
             cls_rank = 2 * (slaveRank / (2 * grp_size)) + slaveRank%2 + 1; // this node only handle (n * cls_rank)-th class's data (n=1,...,tcn/cls_size)
