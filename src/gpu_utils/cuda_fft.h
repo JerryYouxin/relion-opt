@@ -27,6 +27,8 @@ template<typename REAL_T, typename COMPLEX_T, bool isDouble, bool allocHost, boo
 class CudaFFT_TP
 {
 	bool planSet;
+	CudaGlobalPtr<void*,customAlloc> forward_workspace;
+	CudaGlobalPtr<void*,customAlloc> backward_workspace;
 public:
 	CudaGlobalPtr<REAL_T,customAlloc> reals;
 	CudaGlobalPtr<COMPLEX_T,customAlloc> fouriers;
@@ -43,6 +45,8 @@ public:
 	CudaFFT_TP(cudaStream_t stream, CudaCustomAllocator *allocator, int transformDimension = 2):
 		reals(stream, allocator),
 		fouriers(stream, allocator),
+		forward_workspace(stream, allocator),
+		backward_workspace(stream, allocator),
 		cufftPlanForward(0),
 		cufftPlanBackward(0),
 		direction(0),
@@ -204,7 +208,8 @@ public:
 
 		size_t needed, avail, total;
 		needed = estimate(batchSize[0]);
-		DEBUG_HANDLE_ERROR(cudaMemGetInfo( &avail, &total ));
+		if(customAlloc) avail = CFallocator->getTotalFreeSpace();
+		else DEBUG_HANDLE_ERROR(cudaMemGetInfo( &avail, &total ));
 
 //		std::cout << std::endl << "needed = ";
 //		printf("%15zu\n", needed);
@@ -281,60 +286,89 @@ public:
 
 	void setPlan() {
 		if(planSet) return ;
+		// create plans
+		if(direction<=0) cufftCreate(&cufftPlanForward);
+		if(direction>=0) cufftCreate(&cufftPlanBackward);
+		// set workspace of plans to be self-managed
+		if(direction<=0) cufftSetAutoAllocation(cufftPlanForward, false);
+		if(direction>=0) cufftSetAutoAllocation(cufftPlanBackward, false);
+		size_t workSize;
+		// make plans
 		if(isDouble) {
 			if(isComplex) {
 				if(direction<=0)
 				{
-					HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanForward,  dimension, inembed, inembed, istride, idist, onembed, ostride, odist, CUFFT_Z2Z, batchSize[0]));
+					//HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanForward,  dimension, inembed, inembed, istride, idist, onembed, ostride, odist, CUFFT_Z2Z, batchSize[0]));
+					HANDLE_CUFFT_ERROR(cufftMakePlanMany(cufftPlanForward,  dimension, inembed, inembed, istride, idist, onembed, ostride, odist, CUFFT_Z2Z, batchSize[0], &workSize));
 					HANDLE_CUFFT_ERROR( cufftSetStream(cufftPlanForward, fouriers.getStream()));
+					forward_workspace.setSize(workSize);
 				}
 				if(direction>=0)
 				{
-					HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanBackward, dimension, inembed, onembed, ostride, odist, inembed, istride, idist, CUFFT_Z2Z, batchSize[0]));
+					//HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanBackward, dimension, inembed, onembed, ostride, odist, inembed, istride, idist, CUFFT_Z2Z, batchSize[0]));
+					HANDLE_CUFFT_ERROR( cufftMakePlanMany(cufftPlanBackward, dimension, inembed, onembed, ostride, odist, inembed, istride, idist, CUFFT_Z2Z, batchSize[0], &workSize));
 					HANDLE_CUFFT_ERROR( cufftSetStream(cufftPlanBackward, reals.getStream()));
+					backward_workspace.setSize(workSize);
 				}
 			} 
 			else {
 				if(direction<=0)
 				{
-					HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanForward,  dimension, inembed, inembed, istride, idist, onembed, ostride, odist, CUFFT_D2Z, batchSize[0]));
+					//HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanForward,  dimension, inembed, inembed, istride, idist, onembed, ostride, odist, CUFFT_D2Z, batchSize[0]));
+					HANDLE_CUFFT_ERROR( cufftMakePlanMany(cufftPlanForward,  dimension, inembed, inembed, istride, idist, onembed, ostride, odist, CUFFT_D2Z, batchSize[0], &workSize));
 					HANDLE_CUFFT_ERROR( cufftSetStream(cufftPlanForward, fouriers.getStream()));
+					forward_workspace.setSize(workSize);
 				}
 				if(direction>=0)
 				{
-					HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanBackward, dimension, inembed, onembed, ostride, odist, inembed, istride, idist, CUFFT_Z2D, batchSize[0]));
+					//HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanBackward, dimension, inembed, onembed, ostride, odist, inembed, istride, idist, CUFFT_Z2D, batchSize[0]));
+					HANDLE_CUFFT_ERROR( cufftMakePlanMany(cufftPlanBackward, dimension, inembed, onembed, ostride, odist, inembed, istride, idist, CUFFT_Z2D, batchSize[0], &workSize));
 					HANDLE_CUFFT_ERROR( cufftSetStream(cufftPlanBackward, reals.getStream()));
+					backward_workspace.setSize(workSize);
 				}
 			}
-			planSet = true;
 		}
 		else {
 			if(isComplex) {
 				if(direction<=0)
 				{
-					HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanForward,  dimension, inembed, inembed, istride, idist, onembed, ostride, odist, CUFFT_C2C, batchSize[0]));
+					//HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanForward,  dimension, inembed, inembed, istride, idist, onembed, ostride, odist, CUFFT_C2C, batchSize[0]));
+					HANDLE_CUFFT_ERROR( cufftMakePlanMany(cufftPlanForward,  dimension, inembed, inembed, istride, idist, onembed, ostride, odist, CUFFT_C2C, batchSize[0], &workSize));
 					HANDLE_CUFFT_ERROR( cufftSetStream(cufftPlanForward, fouriers.getStream()));
+					forward_workspace.setSize(workSize);
 				}
 				if(direction>=0)
 				{
-					HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanBackward, dimension, inembed, onembed, ostride, odist, inembed, istride, idist, CUFFT_C2C, batchSize[0]));
+					//HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanBackward, dimension, inembed, onembed, ostride, odist, inembed, istride, idist, CUFFT_C2C, batchSize[0]));
+					HANDLE_CUFFT_ERROR( cufftMakePlanMany(cufftPlanBackward, dimension, inembed, onembed, ostride, odist, inembed, istride, idist, CUFFT_C2C, batchSize[0], &workSize));
 					HANDLE_CUFFT_ERROR( cufftSetStream(cufftPlanBackward, reals.getStream()));
+					backward_workspace.setSize(workSize);
 				}
 			}
 			else {
 				if(direction<=0)
 				{
-					HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanForward,  dimension, inembed, inembed, istride, idist, onembed, ostride, odist, CUFFT_R2C, batchSize[0]));
+					//HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanForward,  dimension, inembed, inembed, istride, idist, onembed, ostride, odist, CUFFT_R2C, batchSize[0]));
+					HANDLE_CUFFT_ERROR( cufftMakePlanMany(cufftPlanForward,  dimension, inembed, inembed, istride, idist, onembed, ostride, odist, CUFFT_R2C, batchSize[0], &workSize));
 					HANDLE_CUFFT_ERROR( cufftSetStream(cufftPlanForward, fouriers.getStream()));
+					forward_workspace.setSize(workSize);
 				}
 				if(direction>=0)
 				{
-					HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanBackward, dimension, inembed, onembed, ostride, odist, inembed, istride, idist, CUFFT_C2R, batchSize[0]));
+					//HANDLE_CUFFT_ERROR( cufftPlanMany(&cufftPlanBackward, dimension, inembed, onembed, ostride, odist, inembed, istride, idist, CUFFT_C2R, batchSize[0]));
+					HANDLE_CUFFT_ERROR( cufftMakePlanMany(cufftPlanBackward, dimension, inembed, onembed, ostride, odist, inembed, istride, idist, CUFFT_C2R, batchSize[0], &workSize));
 					HANDLE_CUFFT_ERROR( cufftSetStream(cufftPlanBackward, reals.getStream()));
+					backward_workspace.setSize(workSize);
 				}
 			}
-			planSet = true;
 		}
+		// allocate workspace
+		if(direction<=0) forward_workspace.device_alloc();
+		if(direction>=0) backward_workspace.device_alloc();
+		// set workspace
+		if(direction<=0) HANDLE_CUFFT_ERROR( cufftSetWorkArea(cufftPlanForward, ~forward_workspace) );
+		if(direction>=0) HANDLE_CUFFT_ERROR( cufftSetWorkArea(cufftPlanBackward, ~backward_workspace) );
+		planSet = true;
 	}
 
 	void forward()
@@ -373,10 +407,14 @@ public:
 		{ HANDLE_CUFFT_ERROR( cufftExecZ2D(cufftPlanBackward, ~fouriers, ~dst) ); }
 
 	void clearPlan() {
-		if(direction<=0)
+		if(direction<=0) {
+			forward_workspace.free_device_if_set();
 			HANDLE_CUFFT_ERROR(cufftDestroy(cufftPlanForward));
-		if(direction>=0)
+		}
+		if(direction>=0) {
+			backward_workspace.free_device_if_set();
 			HANDLE_CUFFT_ERROR(cufftDestroy(cufftPlanBackward));
+		}
 		planSet = false;
 	}
 
