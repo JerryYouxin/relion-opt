@@ -278,15 +278,18 @@ void BackProjector::reconstruct_gpu(int rank,
     cudaStream_t stream;
     DEBUG_HANDLE_ERROR(cudaSetDevice(dev_id));
 	DEBUG_HANDLE_ERROR(cudaStreamCreate(&stream));
+	LAUNCH_HANDLE_ERROR(cudaGetLastError());
 #ifdef FORCE_NOT_USE_BUFF_FFT
 	RelionCudaFFT cutransformer(stream, NULL, ref_dim);
 #else
 	BuffCudaFFT3D cutransformer(stream);
-	bool host_splitted = false;
 #endif
 	CudaGlobalPtr<RFLOAT, false> cuFweight(stream);
 	CudaGlobalPtr<double, false> cuFnewweight(stream);
 	CudaGlobalPtr<RFLOAT, false> tabulatedValues(stream);
+	bool host_splitted = false;
+	bool weight_splitted = false;
+	size_t weight_buffSize = 0;
 
 	printf("pad_size=%d, ref_dim=%d, r_max=%d, normalise=%lf\n",pad_size,ref_dim,r_max,normalise);
 
@@ -341,9 +344,18 @@ void BackProjector::reconstruct_gpu(int rank,
 		DEBUG_HANDLE_ERROR(cudaMemGetInfo( &avail, &total ));
 		host_splitted = (avail <= needed);
 		required_free += weight_needed;
-		//weight_splitted = (avail <= needed+weight_needed);
+		weight_splitted = (avail <= needed) && (avail > needed-weight_needed);
 		//printf("cutrans minimal need=%ld, total need=%ld, avail=%ld\n",cutransformer.minReq(pad_size, pad_size, pad_size,1), needed, avail);
-		if(host_splitted) printf("will try HOST bufferring for reconstruction\n");
+		if(host_splitted) {
+			printf("WARNING : will try HOST bufferring for reconstruction due to TOO large reconstruction size\n");
+			REPORT_ERROR("Not Implemented!");
+		}
+		else if(weight_splitted) {
+			printf("will try HOST bufferring only for weight in reconstruction due to large reconstruction size\n");
+			weight_buffSize = CEIL(0.7 * (avail - needed)); // 0.3 for accident;
+			REPORT_ERROR("Not Implemented!");
+		}
+		LAUNCH_HANDLE_ERROR(cudaGetLastError());
 		if(cutransformer.setSize(pad_size, pad_size, pad_size,1,required_free,host_splitted)<0) {
 #endif
 			printf("\n=== Warning : something went wrong when prepare FFT plan, use CPU instead ===\n");
@@ -377,7 +389,8 @@ void BackProjector::reconstruct_gpu(int rank,
 	size_t fxysize= fxsize*fysize;
 	size_t fzsize = ZSIZE(Fconv);
 	size_t fsize  = fxysize*fzsize;
-	cuFweight.setSize(fsize);
+	if(weight_splitted) cuFweight.setSize(weight_buffSize);
+	else                cuFweight.setSize(fsize);
 	cuFnewweight.setSize(fsize);
 	tabulatedValues.setSize(XSIZE(tab_ftblob.tabulatedValues));
 	cuFweight.device_alloc();
@@ -790,8 +803,9 @@ void BackProjector::reconstruct_gpu(int rank,
 	cutransformer.reals.streamSync();
 	cutransformer.reals.cp_to_host();
 	cutransformer.reals.streamSync();
-	cutransformer.reals.free_if_set();
-	cutransformer.fouriers.free_if_set();
+	// cutransformer.reals.free_if_set();
+	// cutransformer.fouriers.free_if_set();
+	cutransformer.free();
 	cutransformer.clear();
 	HANDLE_ERROR(cudaGetLastError());
 	HANDLE_ERROR(cudaDeviceSynchronize());

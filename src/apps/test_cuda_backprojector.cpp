@@ -275,7 +275,24 @@ void runTest(int argc, char **argv)
             init_from(fourier_coverage_reference.data,fourier_coverage.data,NZYXSIZE(fourier_coverage));
         }
         if(node->grp_rank==0) {
-            printf("## INFO: mpi reconstruct\n");
+            printf("Warm up...\n");
+            bp.reconstruct_gpu(node->rank,
+                        vol_out,
+                        max_iter_preweight,
+                        false,
+                        tau2_fudge,
+                        tau2,
+                        sigma2,
+                        evidence_vs_prior,
+                        fourier_coverage,
+                        fsc,
+                        normalise,
+                        update_tau2_with_fsc,
+                        is_whole_instead_of_half,
+                        nr_threads,
+                        minres_map,
+                        node->grp_rank==0);
+            printf("## INFO: gpu reconstruct\n");
             TestTimer::start();
             bp.reconstruct_gpu(node->rank,
                         vol_out,

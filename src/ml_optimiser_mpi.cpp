@@ -3298,6 +3298,12 @@ void MlOptimiserMpi::iterate()
 
     } // end loop iters
 
+#ifdef TIMING
+	// Only first slave prints it timing information
+	if (node->rank == 1)
+		timer.printTimes(false);
+#endif
+
 	// Hopefully this barrier will prevent some bus errors
 	MPI_Barrier(MPI_COMM_WORLD);
 
