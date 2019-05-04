@@ -101,6 +101,8 @@ public:
 
     int relion_MPI_Recv(void *buf, std::ptrdiff_t count, MPI_Datatype datatype, int source, int tag, MPI_Comm comm, MPI_Status &status);
 
+    int relion_MPI_IRecv(void *buf, std::ptrdiff_t count, MPI_Datatype datatype, int source, int tag, MPI_Comm comm);
+
     int relion_MPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm);
 
     int relion_MPI_WaitAll(MPI_Status &status);

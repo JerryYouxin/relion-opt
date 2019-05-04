@@ -344,6 +344,10 @@ void MlOptimiser::parseContinue(int argc, char **argv)
 
 	do_gpu = parser.checkOption("--gpu", "Use available gpu resources for some calculations");
 	gpu_ids = parser.getOption("--gpu", "Device ids for each MPI-thread","default");
+#ifndef USE_ORI_GPUMEM_ASSUMPTION
+    // for mps memory fixing
+	mps = textToInteger(parser.getOption("--mps", "Device numbers of each node. Used for memory fixing (Advanced option).","1"));
+#endif
 #ifndef CUDA
 	if(do_gpu)
 	{
@@ -574,6 +578,10 @@ void MlOptimiser::parseInitial(int argc, char **argv)
 
 	do_gpu = parser.checkOption("--gpu", "Use available gpu resources for some calculations");
 	gpu_ids = parser.getOption("--gpu", "Device ids for each MPI-thread","default");
+#ifndef USE_ORI_GPUMEM_ASSUMPTION
+    // for mps memory fixing
+	mps = textToInteger(parser.getOption("--mps", "Device numbers of each node. Used for memory fixing (Advanced option).","1"));
+#endif
 #ifndef CUDA
 	if(do_gpu)
 	{
@@ -3458,7 +3466,7 @@ void MlOptimiser::symmetriseReconstructions(int rank)
 			{
 				// Immediately after expectation process. Do rise and twist for all asymmetrical units in Fourier space
 				// Also convert helical rise to pixels for BPref object
-#ifdef CUDA
+#if defined(CUDA) && !defined(FORCE_USE_CPU_SYMM) 
 				if(do_gpu)
 					wsum_model.BPref[ith_recons].symmetrise_gpu(rank, mymodel.helical_nr_asu, mymodel.helical_twist[ith_recons], mymodel.helical_rise[ith_recons] / mymodel.pixel_size);
 				else

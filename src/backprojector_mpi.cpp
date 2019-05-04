@@ -449,7 +449,7 @@ void BackProjectorMpi::reconstruct(MultidimArray<RFLOAT> &vol_out,
 			convoluteBlobRealSpace(distributed_transformer);
 
 			RFLOAT w, corr_min = LARGE_NUMBER, corr_max = -LARGE_NUMBER, corr_avg=0., corr_nn=0.;
-			for (long int k = 0, kp = distributed_transformer.local_0_start; k<distributed_transformer.local_n0; k++, kp = (kp+1 < fxsize) ? kp+1 : kp+1 - fzsize)
+			for (long int k = 0, kp = (distributed_transformer.local_0_start<fxsize?distributed_transformer.local_0_start:distributed_transformer.local_0_start-fzsize); k<distributed_transformer.local_n0; k++, kp = (kp+1 < fxsize) ? kp+1 : kp+1 - fzsize)
     			for (long int i = 0, ip = 0 ; i<fysize; i++, ip = (i < fxsize) ? i : i - fysize)
     				for (long int j = 0, jp = 0; j<fxsize; j++, jp = j)
 			{

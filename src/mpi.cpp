@@ -374,6 +374,55 @@ int MpiNode::relion_MPI_Recv(void *buf, std::ptrdiff_t count, MPI_Datatype datat
 
 }
 
+int MpiNode::relion_MPI_IRecv(void *buf, std::ptrdiff_t count, MPI_Datatype datatype, int source, int tag, MPI_Comm comm) {
+    int result;
+    MPI_Request request;
+    RFLOAT current_time = MPI_Wtime();
+    RFLOAT start_time = current_time;
+
+    int unitsize(0);
+    MPI_Type_size(datatype, &unitsize);
+    const std::ptrdiff_t blocksize(512*1024*1024);
+    const std::ptrdiff_t totalsize(count*unitsize);
+    if (totalsize <= blocksize ) {
+        int result_irecv = MPI_Irecv(buf, count, datatype, source, tag, comm, &request);
+        if (result_irecv != MPI_SUCCESS) {
+            report_MPI_ERROR(result_irecv);
+        }
+        all_request.push_back(request);
+    } else {
+        char * const buffer(reinterpret_cast<char*>(buf));
+        const std::ptrdiff_t ntimes(totalsize/blocksize);
+        const std::ptrdiff_t nremain(totalsize%blocksize);
+        std::ptrdiff_t i(0);
+        for(; i<ntimes; ++i) {
+            int result_irecv = MPI_Irecv(buffer+i*blocksize, blocksize, MPI_CHAR, source, tag, comm, &request);
+            if (result_irecv != MPI_SUCCESS) {
+                report_MPI_ERROR(result_irecv);
+            }
+            all_request.push_back(request);
+        }
+        if(nremain>0) {
+            int result_irecv = MPI_Irecv(buffer+i*blocksize, nremain, MPI_CHAR, source, tag, comm, &request);
+            if (result_irecv != MPI_SUCCESS) {
+                report_MPI_ERROR(result_irecv);
+            }
+
+            // result = MPI_Wait(&request, &status);
+            // if (result != MPI_SUCCESS) {
+            //     report_MPI_ERROR(result);
+            // }
+            all_request.push_back(request);
+        }
+    }
+#ifdef VERBOSE_MPISENDRECV
+        if (count > 100)
+                std::cerr <<" relion_MPI_Recv: message from "<<source << " of size "<< count <<" arrived in " << MPI_Wtime() - start_time << " seconds" << std::endl;
+#endif
+        //return result;
+        return MPI_SUCCESS;
+
+}
 
 int MpiNode::relion_MPI_Bcast(void *buffer, int count, MPI_Datatype datatype, int root, MPI_Comm comm)
 {

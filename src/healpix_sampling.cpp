@@ -18,6 +18,9 @@
  * author citations must be preserved.
  ***************************************************************************/
 #include "src/healpix_sampling.h"
+#ifdef PRINT_ROOFLINE_DATA
+#include <omp.h>
+#endif
 //#define DEBUG_SAMPLING
 //#define DEBUG_CHECKSIZES
 //#define DEBUG_HELICAL_ORIENTATIONAL_SEARCH
@@ -614,7 +617,7 @@ RFLOAT HealpixSampling::calculateDeltaRot(Matrix1D<RFLOAT> my_direction, RFLOAT 
 }
 
 #ifdef FORCE_USE_ORIGINAL
-#error FORCE_USE_ORIGINAL could not use now
+//#error FORCE_USE_ORIGINAL could not use now
 void HealpixSampling::selectOrientationsWithNonZeroPriorProbability(
 		RFLOAT prior_rot, RFLOAT prior_tilt, RFLOAT prior_psi,
 		RFLOAT sigma_rot, RFLOAT sigma_tilt, RFLOAT sigma_psi,
@@ -628,6 +631,9 @@ void HealpixSampling::selectOrientationsWithNonZeroPriorProbability(
 
 	if (is_3D)
 	{
+#ifdef PRINT_ROOFLINE_DATA
+        double s = omp_get_wtime();
+#endif
 		// Loop over all directions
 		RFLOAT sumprior = 0.;
 		// Keep track of the closest distance to prevent 0 orientations
@@ -768,6 +774,16 @@ void HealpixSampling::selectOrientationsWithNonZeroPriorProbability(
 
 		} // end for idir
 
+#ifdef PRINT_ROOFLINE_DATA
+			double e = omp_get_wtime();
+            double time = e-s;
+            int FLOP = rot_angles.size()*(36+R_repository.size()*42)+pointer_dir_nonzeroprior.size()*11;
+            int BYTE = rot_angles.size()*(6+R_repository.size()*15)+pointer_dir_nonzeroprior.size()*3;
+            double GFLOPS = (double)FLOP / time / 1e9;
+            double OI     = (double)FLOP / (double)BYTE;
+            printf("-- Na=%d, Neffect=%d, NR=%d, time=%lf sec, GFLOPS=%lf, O.I.=%lf\n", rot_angles.size(), pointer_dir_nonzeroprior.size(), R_repository.size(), time, GFLOPS, OI);
+#endif
+
 		//Normalise the prior probability distribution to have sum 1 over all psi-angles
 		for (long int idir = 0; idir < directions_prior.size(); idir++)
 			directions_prior[idir] /= sumprior;
@@ -887,6 +903,9 @@ void HealpixSampling::selectOrientationsWithNonZeroPriorProbability(
 		
 		if ( (sigma_rot > 0.) && (sigma_tilt > 0.) )
 		{
+#ifdef PRINT_ROOFLINE_DATA
+            double s = omp_get_wtime();
+#endif
 			Matrix1D<RFLOAT> prior_direction;
 			// Get the direction of the prior
 			Euler_angles2direction(prior_rot, prior_tilt, prior_direction);
@@ -944,6 +963,15 @@ void HealpixSampling::selectOrientationsWithNonZeroPriorProbability(
 					best_ang = diffang;
 				}
 			}
+#ifdef PRINT_ROOFLINE_DATA
+			double e = omp_get_wtime();
+            double time = e-s;
+            int FLOP = rot_angles.size()*(22+R_repository.size()*42)+pointer_dir_nonzeroprior.size()*8;
+            int BYTE = rot_angles.size()*(6+R_repository.size()*15)+pointer_dir_nonzeroprior.size()*3;
+            double GFLOPS = (double)FLOP / time / 1e9;
+            double OI     = (double)FLOP / (double)BYTE;
+            printf("-- Na=%d, Neffect=%d, NR=%d, time=%lf sec, GFLOPS=%lf, O.I.=%lf\n", rot_angles.size(), pointer_dir_nonzeroprior.size(), R_repository.size(), time, GFLOPS, OI);
+#endif
 		}
 		else if (sigma_rot > 0.)
 		{

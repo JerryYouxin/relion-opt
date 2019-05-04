@@ -1036,6 +1036,9 @@ void BackProjector::reconstruct(MultidimArray<RFLOAT> &vol_out,
 		}
 		decenter(weight, Fnewweight, max_r2);
 		RCTOC(ReconTimer,ReconS_5);
+#ifdef PRINT_ROOFLINE_DATA
+		double s = omp_get_wtime();
+#endif
 		// Iterative algorithm as in  Eq. [14] in Pipe & Menon (1999)
 		// or Eq. (4) in Matej (2001)
 		for (int iter = 0; iter < max_iter_preweight; iter++)
@@ -1082,6 +1085,28 @@ void BackProjector::reconstruct(MultidimArray<RFLOAT> &vol_out,
 			std::cerr << " corr_max= " << corr_max << std::endl;
 	#endif
 		}
+
+#ifdef PRINT_ROOFLINE_DATA
+			double e = omp_get_wtime();
+			size_t Xsize = XSIZE(Fconv);
+			size_t Ysize = YSIZE(Fconv);
+			size_t Zsize = ZSIZE(Fconv);
+			double time = e - s;
+			double FLOP = (double)10*2*Xsize*Ysize*Zsize*(double)(2*int(log2((double)pad_size*(double)Ysize*(double)Zsize))+12);
+			double BYTE = 10*pad_size*Ysize*Zsize*7;
+			double GFLOPS = (double)FLOP / time / 1e9;
+			double OI     = (double)FLOP / (double)BYTE;
+			printf("doGridding: %lf GFLOPS, O.I.=%lf, time=%lf sec, pad_size=%d, Xsize=%d, Ysize=%d, Zsize=%d\n",GFLOPS, OI, time, pad_size,Xsize, Ysize, Zsize);
+			char fn[50];
+			sprintf(fn,"doGriddingIter_perf_CPU.csv");
+			FILE* fp = fopen(fn,"a");
+			fprintf(fp,"%lf,",GFLOPS);
+			fclose(fp);
+			sprintf(fn,"doGriddingIter_OI_CPU.csv");
+			fp = fopen(fn,"a");
+			fprintf(fp,"%lf,",OI);
+			fclose(fp);
+#endif
 
 		RCTIC(ReconTimer,ReconS_7);
 	#ifdef DEBUG_RECONSTRUCT
@@ -1511,6 +1536,9 @@ void BackProjector::applyPointGroupSymmetry()
 	int rmax2 = ROUND(r_max * padding_factor) * ROUND(r_max * padding_factor);
 	if (SL.SymsNo() > 0 && ref_dim == 3)
 	{
+#ifdef PRINT_ROOFLINE_DATA
+		double s = omp_get_wtime();
+#endif
 		Matrix2D<RFLOAT> L(4, 4), R(4, 4); // A matrix from the list
 		MultidimArray<RFLOAT> sum_weight;
 		MultidimArray<Complex > sum_data;
@@ -1650,6 +1678,24 @@ void BackProjector::applyPointGroupSymmetry()
 	    	DIRECT_MULTIDIM_ELEM(weight, n) = DIRECT_MULTIDIM_ELEM(sum_weight, n) / (RFLOAT)(SL.SymsNo() + 1);
 	    }
 	    */
+#ifdef PRINT_ROOFLINE_DATA
+			double e = omp_get_wtime();
+			double time = e - s;
+			double FLOP = (double)XSIZE(sum_weight)*YSIZE(sum_weight)*ZSIZE(sum_weight)*98;
+			double BYTE = XSIZE(sum_weight)*YSIZE(sum_weight)*ZSIZE(sum_weight)*42 + 32*SL.SymsNo();
+			double GFLOPS = (double)FLOP / time / 1e9;
+			double OI     = (double)FLOP / (double)BYTE;
+			printf("SYMM: %lf GFLOPS, O.I.=%lf, time=%lf sec, pad_size=%d, Xsize=%d, Ysize=%d, Zsize=%d\n",GFLOPS, OI, time, pad_size, XSIZE(sum_weight), YSIZE(sum_weight), ZSIZE(sum_weight));
+			char fn[50];
+			sprintf(fn,"SYMM_CPU_perf.csv");
+			FILE* fp = fopen(fn,"a");
+			fprintf(fp,"%lf,",GFLOPS);
+			fclose(fp);
+			sprintf(fn,"SYMM_CPU_OI.csv");
+			fp = fopen(fn,"a");
+			fprintf(fp,"%lf,",OI);
+			fclose(fp);
+#endif
 	}
 
 }
@@ -1667,6 +1713,9 @@ void BackProjector::applyPointGroupSymmetry()
 	int symno = SL.SymsNo();
 	if (symno > 0 && ref_dim == 3)
 	{
+#ifdef PRINT_ROOFLINE_DATA
+		double s = omp_get_wtime();
+#endif
 		Matrix2D<RFLOAT> L(4, 4), R(4, 4); // A matrix from the list
 		MultidimArray<RFLOAT> ori_weight;
 		MultidimArray<Complex > ori_data;
@@ -1825,6 +1874,24 @@ void BackProjector::applyPointGroupSymmetry()
 			} // end for k
 		} // end omp parallel
 		delete[] allR;
+#ifdef PRINT_ROOFLINE_DATA
+			double e = omp_get_wtime();
+			double time = e - s;
+			double FLOP = (double)XSIZE(weight)*YSIZE(weight)*ZSIZE(weight)*98;
+			double BYTE = XSIZE(weight)*YSIZE(weight)*ZSIZE(weight)*39 + 9*SL.SymsNo();
+			double GFLOPS = (double)FLOP / time / 1e9;
+			double OI     = (double)FLOP / (double)BYTE;
+			printf("SYMM: %lf GFLOPS, O.I.=%lf, time=%lf sec, pad_size=%d, Xsize=%d, Ysize=%d, Zsize=%d\n",GFLOPS, OI, time, pad_size, XSIZE(weight), YSIZE(weight), ZSIZE(weight));
+			char fn[50];
+			sprintf(fn,"SYMM_CPU_OMP_perf.csv");
+			FILE* fp = fopen(fn,"a");
+			fprintf(fp,"%lf,",GFLOPS);
+			fclose(fp);
+			sprintf(fn,"SYMM_CPU_OMP_OI.csv");
+			fp = fopen(fn,"a");
+			fprintf(fp,"%lf,",OI);
+			fclose(fp);
+#endif
 	} // end if
 
 }

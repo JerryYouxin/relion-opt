@@ -321,7 +321,10 @@ public:
 
 	// Which GPU devices to use?
 	std::string gpu_ids;
-
+#ifndef USE_ORI_GPUMEM_ASSUMPTION
+	// How much devices in a node. used for MPS memory fixing.
+	int mps;
+#endif
 	// Or preread all images into RAM on the master node?
 	bool do_preread_images;
 

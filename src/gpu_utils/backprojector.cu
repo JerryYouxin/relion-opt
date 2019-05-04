@@ -83,6 +83,7 @@ void BackProjector::applyPointGroupSymmetry_gpu(int rank)
 	int rmax2 = ROUND(r_max * padding_factor) * ROUND(r_max * padding_factor);
 	if (SL.SymsNo() > 0 && ref_dim == 3)
 	{
+		printf("gpu...,rmax2=%d\n",rmax2);
 		DTIC(sym_timer,TIMING_START_1);
 		//cudaStream_t stream;
 		//cudaStreamCreate(&stream);
@@ -153,6 +154,9 @@ void BackProjector::applyPointGroupSymmetry_gpu(int rank)
 		HANDLE_ERROR(cudaStreamSynchronize(0));
 		DTOC(sym_timer,TIMING_DEVTODEV);
 		DTIC(sym_timer,TIMING_KERNEL);
+#ifdef PRINT_ROOFLINE_DATA
+		double s = omp_get_wtime();
+#endif
 		symmetrise_kernel <<< gridDim, blockDim >>>(my_data_temp_D,
 													my_weight_temp_D,
 													my_data_D,
@@ -168,6 +172,25 @@ void BackProjector::applyPointGroupSymmetry_gpu(int rank)
 													SL.SymsNo());
 		HANDLE_ERROR(cudaGetLastError());
 		HANDLE_ERROR(cudaStreamSynchronize(0));
+#ifdef PRINT_ROOFLINE_DATA
+		double e = omp_get_wtime();
+		double time = e - s;
+		double FLOP = (double)xdim*(double)ydim*(double)zdim*98;
+		double BYTE = 39*(double)xdim*(double)ydim*(double)zdim + (double)9*SL.SymsNo();
+		double GFLOPS = (double)FLOP / time / 1e9;
+		double OI     = (double)FLOP / (double)BYTE;
+		printf("SYMM : %lf GFLOPS, O.I.=%lf, time=%lf, symsNo=%d, Nx=%d, Ny=%d, Nz=%d\n",GFLOPS, OI, time, SL.SymsNo(),xdim,ydim,zdim);
+		fflush(stdout);
+		char fn[50];
+		sprintf(fn,"SYMM_perf_%d.txt",rank);
+		FILE* fp = fopen(fn,"a");
+		fprintf(fp,"%lf,",GFLOPS);
+		fclose(fp);
+		sprintf(fn,"SYMM_OI_%d.txt",rank);
+		fp = fopen(fn,"a");
+		fprintf(fp,"%lf,",OI);
+		fclose(fp);
+#endif
 		DTOC(sym_timer,TIMING_KERNEL);
 		DTIC(sym_timer,TIMING_DEVTOHST);
 		cudaMemcpyAsync(data.data, my_data_D, model_size * sizeof(__COMPLEX_T ), cudaMemcpyDeviceToHost,0);
@@ -333,7 +356,8 @@ void BackProjector::reconstruct_gpu(int rank,
 		vol_out.setDimensions(pad_size, pad_size, pad_size, 1);
 		Fconv.reshape(pad_size,pad_size,pad_size/2+1);
 #ifdef FORCE_NOT_USE_BUFF_FFT
-		if(cutransformer.setSize(pad_size, pad_size, pad_size,1,1)<0) {
+		//if(cutransformer.setSize(pad_size, pad_size, pad_size,1,1)<0) {
+		if(cutransformer.setSize(pad_size, pad_size, pad_size,1,0)<0) {
 #else
 		size_t fconv_size = pad_size*pad_size*(pad_size/2+1);
 		size_t needed = cutransformer.minReq(pad_size, pad_size, pad_size,1);
@@ -356,7 +380,8 @@ void BackProjector::reconstruct_gpu(int rank,
 			REPORT_ERROR("Not Implemented!");
 		}
 		LAUNCH_HANDLE_ERROR(cudaGetLastError());
-		if(cutransformer.setSize(pad_size, pad_size, pad_size,1,required_free,host_splitted)<0) {
+		//if(cutransformer.setSize(pad_size, pad_size, pad_size,1,required_free,host_splitted)<0) {
+		if(cutransformer.setSize(pad_size, pad_size, pad_size,0,required_free,host_splitted)<0) {
 #endif
 			printf("\n=== Warning : something went wrong when prepare FFT plan, use CPU instead ===\n");
 			cutransformer.clear();
@@ -639,6 +664,9 @@ void BackProjector::reconstruct_gpu(int rank,
 			tabulatedValues.cp_to_device();
 			DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
 			LAUNCH_HANDLE_ERROR(cudaGetLastError());
+#ifdef PRINT_ROOFLINE_DATA
+			double s = omp_get_wtime();
+#endif
 			for (int iter = 0; iter < max_iter_preweight; iter++)
 			{
 				DTIC(ReconTimer,ReconS_6);
@@ -654,9 +682,9 @@ void BackProjector::reconstruct_gpu(int rank,
 				// convolute through Fourier-transform (as both grids are rectangular)
 				// Note that convoluteRealSpace acts on the complex array inside the transformer
 				// do_mask = false
-				cutransformer.clearPlan();
-				cutransformer.direction=1;
-				cutransformer.setPlan();
+				//cutransformer.clearPlan();
+				//cutransformer.direction=1;
+				//cutransformer.setPlan();
 				cutransformer.backward();
 				DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
 				multFTBlobKernel_noMask<<<blknum,BLOCK_SIZE,0,stream>>>(~(cutransformer.reals), 
@@ -667,9 +695,9 @@ void BackProjector::reconstruct_gpu(int rank,
 							~tabulatedValues,XSIZE(tab_ftblob.tabulatedValues));
 				LAUNCH_HANDLE_ERROR(cudaGetLastError());
 				DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
-				cutransformer.clearPlan();
-				cutransformer.direction=-1;
-				cutransformer.setPlan();
+				//cutransformer.clearPlan();
+				//cutransformer.direction=-1;
+				//cutransformer.setPlan();
 				cutransformer.forward();
 				DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
 				ScaleComplexPointwise_kernel <<< blknum, BLOCK_SIZE,0,stream>>>(~cutransformer.fouriers, fsize, size);
@@ -680,6 +708,31 @@ void BackProjector::reconstruct_gpu(int rank,
 				DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
 				DTOC(ReconTimer,ReconS_6);
 			}
+#ifdef PRINT_ROOFLINE_DATA
+			double e = omp_get_wtime();
+			double time = e - s;
+			double FLOP = (double)10*2*(Xsize/2+1)*Ysize*Zsize*(double)(2*int(log2((double)Xsize*(double)Ysize*(double)Zsize))+12);
+			double BYTE = 10*2*(Xsize/2+1)*Ysize*Zsize*7;
+			double GFLOPS = (double)FLOP / time / 1e9;
+			double OI     = (double)FLOP / (double)BYTE;
+			printf("doGridding: %lf GFLOPS, O.I.=%lf, time=%lf sec, pad_size=%d, Xsize=%d, Ysize=%d, Zsize=%d\n",GFLOPS, OI, time, pad_size,Xsize, Ysize, Zsize);
+			size_t avail, total;
+			DEBUG_HANDLE_ERROR(cudaMemGetInfo( &avail, &total ));
+			printf("GPU MEMORY used : %lf GB\n",(double)(total - avail)/(double)1e9);
+			char fn[50];
+			sprintf(fn,"doGriddingIter_perf_%d.csv",rank);
+			FILE* fp = fopen(fn,"a");
+			fprintf(fp,"%lf,",GFLOPS);
+			fclose(fp);
+			sprintf(fn,"doGriddingIter_OI_%d.csv",rank);
+			fp = fopen(fn,"a");
+			fprintf(fp,"%lf,",OI);
+			fclose(fp);
+			sprintf(fn,"doGriddingIter_GPUMEM_%d.csv",rank);
+			fp = fopen(fn,"a");
+			fprintf(fp,"%lf,",(double)(total - avail)/(double)1e9);
+			fclose(fp);
+#endif
 			cuFnewweight.cp_to_host();
 			cutransformer.clearPlan();
 			DEBUG_HANDLE_ERROR(cudaStreamSynchronize(stream));
@@ -805,8 +858,13 @@ void BackProjector::reconstruct_gpu(int rank,
 	cutransformer.reals.streamSync();
 	// cutransformer.reals.free_if_set();
 	// cutransformer.fouriers.free_if_set();
+#ifndef FORCE_NOT_USE_BUFF_FFT
 	cutransformer.free();
+#endif
 	cutransformer.clear();
+#ifdef FORCE_NOT_USE_BUFF_FFT
+	cutransformer.free_all();
+#endif
 	HANDLE_ERROR(cudaGetLastError());
 	HANDLE_ERROR(cudaDeviceSynchronize());
 	cudaStreamDestroy(stream);

@@ -190,6 +190,8 @@ __global__ void selectRotTiltDirection(RFLOAT* directions_prior, int* findDirNum
             diffang = ACOSD(diffang);
             RFLOAT prior = gaussian1D_kernel(diffang, biggest_sigma, 0., sqrt_sigma);
             directions_prior[idir] = prior;
+            sumprior_sh[tid] = prior;
+            findDirnum_sh[tid] = 1;
         }
     }
     __syncthreads();
@@ -228,7 +230,7 @@ __global__ void selectRotTiltDirection(RFLOAT* directions_prior, int* findDirNum
         sumprior_sh[tid]   += sumprior_sh[tid+1];
         findDirnum_sh[tid] += findDirnum_sh[tid+1];
         atomicAdd(sumprior,sumprior_sh[0]);
-        atomicAdd(findDirNum,finDirNum_sh[0]);
+        atomicAdd(findDirNum,findDirnum_sh[0]);
     }
 }
 #else

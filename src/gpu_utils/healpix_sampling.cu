@@ -6,6 +6,9 @@
 #include <time.h>
 #include "src/time.h"
 #include <assert.h>
+#ifdef PRINT_ROOFLINE_DATA
+#include <omp.h>
+#endif
 
 //#define DEBUG_SELECT_GPU
 //#define TIMING_
@@ -101,6 +104,11 @@ void HealpixSampling::selectOrientationsWithNonZeroPriorProbability_gpu(
             timer.tic(T0);
 #endif
 #endif
+
+#ifdef PRINT_ROOFLINE_DATA
+            double s = omp_get_wtime();
+#endif
+
             Matrix1D<RFLOAT> prior_direction;
             // Get the direction of the prior
             Euler_angles2direction(prior_rot, prior_tilt, prior_direction);
@@ -145,6 +153,12 @@ void HealpixSampling::selectOrientationsWithNonZeroPriorProbability_gpu(
                 RL_repository_tmp[s+7] = L_repository[j].mdata[7];
                 RL_repository_tmp[s+8] = L_repository[j].mdata[8];
             }
+
+#ifdef PRINT_ROOFLINE_DATA
+            double e = omp_get_wtime();
+            double time_init = e - s;
+#endif
+
 #ifdef DEBUG_SELECT_GPU
 #ifdef TIMING_
     timer.toc(T0);
@@ -215,6 +229,10 @@ void HealpixSampling::selectOrientationsWithNonZeroPriorProbability_gpu(
             HANDLE_ERROR(cudaGetLastError());
 #endif
 
+#ifdef PRINT_ROOFLINE_DATA
+            s = omp_get_wtime();
+#endif
+
             int blknum = (rotAnglesSize+BLOCK_SIZE-1) / BLOCK_SIZE;
             selectRotTiltDirection<BLOCK_SIZE><<<blknum,BLOCK_SIZE,0,cufindDirNum.getStream()>>>(~cudirections_prior, 
                 ~cufindDirNum, ~cusumprior,
@@ -230,6 +248,12 @@ void HealpixSampling::selectOrientationsWithNonZeroPriorProbability_gpu(
             printf("++++++++++++++++++ kernel launched ++++++++++++++++++++\n");
 #endif
             cufindDirNum.streamSync();
+
+#ifdef PRINT_ROOFLINE_DATA
+            e = omp_get_wtime();
+            double time_kernel = e-s;
+#endif
+
 #ifdef DEBUG_SELECT_GPU
             HANDLE_ERROR(cudaGetLastError());
             printf("++++++++++++++++++ kernel syncronized +++++++++++++++++\n");
@@ -242,6 +266,32 @@ void HealpixSampling::selectOrientationsWithNonZeroPriorProbability_gpu(
             cufindDirNum.cp_to_host();
             cusumprior.cp_to_host();
             cufindDirNum.streamSync();
+#ifdef PRINT_ROOFLINE_DATA
+            //double time = time_init + time_kernel;
+            double time = time_kernel;
+            int FLOP = rotAnglesSize*(22+R_repository_Size*42)+size*8;
+            int BYTE = rotAnglesSize*(6+R_repository_Size*15)+size*3;
+            double GFLOPS = (double)FLOP / time / 1e9;
+            double OI     = (double)FLOP / (double)BYTE;
+            printf("-- Na=%d, Neffect=%d, NR=%d, time=%lf sec, GFLOPS=%lf, O.I.=%lf\n", rotAnglesSize, size, R_repository_Size, time, GFLOPS, OI);
+            char fn[50];
+			sprintf(fn,"select_perf.txt");
+			FILE* fp = fopen(fn,"a");
+			fprintf(fp,"%lf,",GFLOPS);
+            fclose(fp);
+            sprintf(fn,"select_time.txt");
+			fp = fopen(fn,"a");
+			fprintf(fp,"%lf,",time);
+			fclose(fp);
+			sprintf(fn,"select_OI.txt");
+			fp = fopen(fn,"a");
+			fprintf(fp,"%lf,",OI);
+            fclose(fp);
+            sprintf(fn,"select_perf.txt");
+			fp = fopen(fn,"a");
+			fprintf(fp,"%lf,",GFLOPS);
+			fclose(fp);
+#endif
 #ifdef DEBUG_SELECT_GPU
             HANDLE_ERROR(cudaGetLastError());
 #ifdef TIMING_
@@ -304,21 +354,21 @@ void HealpixSampling::selectOrientationsWithNonZeroPriorProbability_gpu(
                 timer.tic(T4);
 #endif
 #endif
-                for(int i=0; i<size; ++i) {
-                    for(int j=0; j<i; ++j) {
-                        if(pointer_dir_nonzeroprior[i]<pointer_dir_nonzeroprior[j]) {
-                            int t1;
-                            t1 = pointer_dir_nonzeroprior[i];
-                            pointer_dir_nonzeroprior[i] = pointer_dir_nonzeroprior[j];
-                            pointer_dir_nonzeroprior[j] = t1;
+                // for(int i=0; i<size; ++i) {
+                //     for(int j=0; j<i; ++j) {
+                //         if(pointer_dir_nonzeroprior[i]<pointer_dir_nonzeroprior[j]) {
+                //             int t1;
+                //             t1 = pointer_dir_nonzeroprior[i];
+                //             pointer_dir_nonzeroprior[i] = pointer_dir_nonzeroprior[j];
+                //             pointer_dir_nonzeroprior[j] = t1;
 
-                            RFLOAT t2;
-                            t2 = directions_prior[i];
-                            directions_prior[i] = directions_prior[j];
-                            directions_prior[j] = t2;
-                        }
-                    }
-                }
+                //             RFLOAT t2;
+                //             t2 = directions_prior[i];
+                //             directions_prior[i] = directions_prior[j];
+                //             directions_prior[j] = t2;
+                //         }
+                //     }
+                // }
 #ifdef DEBUG_SELECT_GPU
 #ifdef TIMING_
                 timer.toc(T4);

@@ -92,14 +92,14 @@ void FourierTransformer::init()
     fPlanBackward    = NULL;
     dataPtr          = NULL;
     complexDataPtr   = NULL;
-//#ifndef FORCE_USE_ORI_RECONS
+#ifndef FORCE_USE_ORI_RECONS
 	int nr_threads = omp_get_max_threads();
 	bool thread_ok = (nr_threads>1);
     if(thread_ok) {
         fftw_init_threads();
         fftw_plan_with_nthreads(nr_threads);
     }
-//#endif
+#endif
 }
 
 void FourierTransformer::clear()
