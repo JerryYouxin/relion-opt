@@ -205,7 +205,7 @@ void DistributedFourierTransformer::setSize(int nx, int ny, int nz) {
 #endif
         fPlanForward = fftwf_mpi_plan_dft_r2c(ndim, N, fReal_local,
                                          (fftwf_complex*) fFourier_local, 
-                                         comm, FFTW_ESTIMATE);
+                                         comm, FFTW_ESTIMATE|FFTW_DESTROY_INPUT);
 #ifdef DEBUG_DISTRIBUTED_FFT
         std::cout << "## Rank " << rank << " single Planning backward..." << std::endl;
         MPI_Barrier(comm);
@@ -213,7 +213,7 @@ void DistributedFourierTransformer::setSize(int nx, int ny, int nz) {
         fPlanBackward = fftwf_mpi_plan_dft_c2r(ndim, N,
                                           (fftwf_complex*) fFourier_local, 
                                           fReal_local,
-                                          comm, FFTW_ESTIMATE);
+                                          comm, FFTW_ESTIMATE|FFTW_DESTROY_INPUT);
 #else
 #ifdef DEBUG_DISTRIBUTED_FFT
         std::cout << "## Rank " << rank << " Planning forward..." << std::endl;
@@ -222,7 +222,7 @@ void DistributedFourierTransformer::setSize(int nx, int ny, int nz) {
 #endif
         fPlanForward = fftw_mpi_plan_dft_r2c(ndim, N, fReal_local,
                                          (fftw_complex*) fFourier_local, 
-                                         comm, FFTW_ESTIMATE);
+                                         comm, FFTW_ESTIMATE|FFTW_DESTROY_INPUT);
 #ifdef DEBUG_DISTRIBUTED_FFT
         std::cout << "## Rank " << rank << " Planning backward..." << std::endl;
         MPI_Barrier(comm);
@@ -231,7 +231,7 @@ void DistributedFourierTransformer::setSize(int nx, int ny, int nz) {
         fPlanBackward = fftw_mpi_plan_dft_c2r(ndim, N,
                                           (fftw_complex*) fFourier_local, 
                                           fReal_local,
-                                          comm, FFTW_ESTIMATE);
+                                          comm, FFTW_ESTIMATE|FFTW_DESTROY_INPUT);
 #endif
 #ifdef DEBUG_DISTRIBUTED_FFT
         std::cout << "## Rank " << rank << " Planning finished" << std::endl;
