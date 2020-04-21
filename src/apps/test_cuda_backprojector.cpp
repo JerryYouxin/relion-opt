@@ -2,6 +2,7 @@
 #include "src/time.h"
 
 #define CUDA
+#define FORCE_USE_ORI_SYMM
 
 #include "src/fftw.h"
 
@@ -163,23 +164,30 @@ void printData(__COMPLEX_T* data, int js, int is, int ks, int xi, int yi, int zi
     return;
 }
 
-void runTest(int argc, char **argv)
+void runTest(MpiNode* node, int ori, int pad)
 {
     omp_set_num_threads(28);
-    MpiNode *node = new MpiNode(argc,argv);
-    node->groupInit(2); // class number 1 for testing
-    BackProjector bp(400,3,"c1");
-    BackProjector bp_reference(400,3,"c1");
-    bp.pad_size = 803;
-    bp_reference.pad_size = 803;
+    BackProjector bp(ori,3,"c1");
+    BackProjector bp_reference(ori,3,"c1");
+    // bp.pad_size = 803;
+    // bp_reference.pad_size = 803;
 
-    bp.r_max = 200;
-    bp_reference.r_max = 200;
+    // bp.r_max = 200;
+    // bp_reference.r_max = 200;
     // bp.pad_size = 615;
     // bp_reference.pad_size = 615;
 
     // bp.r_max = 200;
     // bp_reference.r_max = 200;
+    // bp.pad_size = 203;
+    // bp_reference.pad_size = 203;
+    bp.pad_size = pad;
+    bp_reference.pad_size = pad;
+
+    // bp.r_max = 37;
+    // bp_reference.r_max = 37;
+    bp.r_max = sqrt(pad*2);
+    bp_reference.r_max = bp.r_max;
     if(!node->isMaster()) {
         RFLOAT tau2_fudge = 1.0;
         int max_iter_preweight = 10;
@@ -275,23 +283,23 @@ void runTest(int argc, char **argv)
             init_from(fourier_coverage_reference.data,fourier_coverage.data,NZYXSIZE(fourier_coverage));
         }
         if(node->grp_rank==0) {
-            printf("Warm up...\n");
-            bp.reconstruct_gpu(node->rank,
-                        vol_out,
-                        max_iter_preweight,
-                        false,
-                        tau2_fudge,
-                        tau2,
-                        sigma2,
-                        evidence_vs_prior,
-                        fourier_coverage,
-                        fsc,
-                        normalise,
-                        update_tau2_with_fsc,
-                        is_whole_instead_of_half,
-                        nr_threads,
-                        minres_map,
-                        node->grp_rank==0);
+            // printf("Warm up...\n");
+            // bp.reconstruct_gpu(node->rank,
+            //             vol_out,
+            //             max_iter_preweight,
+            //             false,
+            //             tau2_fudge,
+            //             tau2,
+            //             sigma2,
+            //             evidence_vs_prior,
+            //             fourier_coverage,
+            //             fsc,
+            //             normalise,
+            //             update_tau2_with_fsc,
+            //             is_whole_instead_of_half,
+            //             nr_threads,
+            //             minres_map,
+            //             node->grp_rank==0);
             printf("## INFO: gpu reconstruct\n");
             TestTimer::start();
             bp.reconstruct_gpu(node->rank,
@@ -363,19 +371,24 @@ void runTest(int argc, char **argv)
         }
     }
     MPI_Barrier(MPI_COMM_WORLD);
-    delete node;
+    //delete node;
 }
 
-void test_symmtrise(int argc, char **argv)
+void test_symmtrise(MpiNode* node, int ori, int pad)
 {
-    MpiNode *node = new MpiNode(argc,argv);
-    node->groupInit(2); // class number 1 for testing
-    BackProjector bp(400,3,"I3");
-    BackProjector bp_reference(400,3,"I3");
-    bp.pad_size = 315;
-    bp_reference.pad_size = 315;
-    bp.r_max = 78;
-    bp_reference.r_max = 78;
+    sleep(60);
+    //MpiNode *node = new MpiNode(argc,argv);
+    //node->groupInit(2); // class number 1 for testing
+    BackProjector bp(ori,3,"I3");
+    BackProjector bp_reference(ori,3,"I3");
+    // bp.pad_size = 315;
+    // bp_reference.pad_size = 315;
+    // bp.r_max = 78;
+    // bp_reference.r_max = 78;
+    bp.pad_size = pad;
+    bp_reference.pad_size = pad;
+    bp.r_max = sqrt(pad);
+    bp_reference.r_max = bp.r_max;
     bp.padding_factor = 2;
     bp_reference.padding_factor = 2;
     if(!node->isMaster()) {
@@ -395,9 +408,9 @@ void test_symmtrise(int argc, char **argv)
         bp_reference.data.xinit = 0;
 
         // warm up gpu
-        printf("== warm up ==\n");
-        bp.symmetrise_gpu(node->rank);
-        printf("==  finish ==\n");
+        // printf("== warm up ==\n");
+        // bp.symmetrise_gpu(node->rank);
+        // printf("==  finish ==\n");
         // initialise
         init_random(bp.weight.data, NZYXSIZE(bp.weight));
         init_random((__COMPLEX_T*)bp.data.data, NZYXSIZE(bp.data));
@@ -405,11 +418,12 @@ void test_symmtrise(int argc, char **argv)
         init_from((__COMPLEX_T*)bp_reference.data.data,(__COMPLEX_T*)bp.data.data,NZYXSIZE(bp.data));
 
         TestTimer::start();
+        printf("gpu...\n");
         bp.symmetrise_gpu(node->rank);
         TestTimer::stop();
-        TestTimer::printTime(" OMP SYMM ");
+        TestTimer::printTime(" OPT SYMM ");
         TestTimer::start();
-        bp_reference.symmetrise();
+        //bp_reference.symmetrise();
         TestTimer::stop();
         TestTimer::printTime(" ORI SYMM ");
 
@@ -434,7 +448,7 @@ void test_symmtrise(int argc, char **argv)
         }
     }
     MPI_Barrier(MPI_COMM_WORLD);
-    delete node;
+    //delete node;
 }
 
 void test_forward(int argc, char **argv)
@@ -648,9 +662,25 @@ END:
 
 int main(int argc, char **argv)
 {
+    MpiNode *node = new MpiNode(argc,argv);
+    node->groupInit(2); // class number 1 for testing
     omp_set_num_threads(28);
-    runTest(argc,argv);
-    //test_symmtrise(argc,argv);
+    int pad_start = 128;
+    int pad_end = 530;
+    printf("Warm up...\n");
+    // runTest(node, 400, 128);
+    // printf("now begin RECONS\n");
+    // for(int i=pad_start;i<pad_end;i+=32) {
+    //     for(int k=0; k<3;++k)
+    //         runTest(node, 400, i);
+    // }
+    test_symmtrise(node, 400, 128);
+    printf("Now begin SYMM\n");
+    for(int i=pad_start;i<pad_end;i+=32) {
+        for(int k=0; k<3;++k)
+            test_symmtrise(node, 400, i);
+    }
+    delete node;
     //test_forward(argc,argv);
     //test_backward(argc,argv);
     return 0;
