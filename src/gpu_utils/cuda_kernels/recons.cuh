@@ -21,6 +21,16 @@ __global__ void symmetrise_kernel(const __COMPLEX_T * __restrict__ my_data_temp_
                                   int my_rmax2,
                                   int nr_SymsNo);
 //-----------------------------------------------------------------------------------------------
+__global__ void multFTBlobKernel_noMask_zsplit( 
+        RFLOAT* real, int zstart,
+        int XYZSIZE, int XYSIZE, 
+        int XSIZE, int YSIZE,
+        int padhdim, int pad_size,
+        int padding_factor,
+        int orixpad,
+        RFLOAT  normftblob, RFLOAT sampling,
+        RFLOAT* tabulatedValues , int tabftblob_xsize);
+
 __global__ void multFTBlobKernel_noMask( 
         RFLOAT* real, 
         int XYZSIZE, int XYSIZE, 
@@ -44,7 +54,7 @@ __global__ void multFTBlobKernel_withMask(
 __global__ void initFconvKernel(__COMPLEX_T *Fconv,double* Fnewweight,RFLOAT* Fweight,int size);
 //-----------------------------------------------------------------------------------------------
 __global__ void divFconvKernel(__COMPLEX_T * __restrict__ Fconv, double* Fnewweight, int max_r2, int XYZSIZE, int XYSIZE, int XSIZE, int YSIZE, int ZSIZE);
-
+__global__ void divFconvKernel_ysplit(__COMPLEX_T * __restrict__ Fconv, double* Fnewweight, int max_r2, int XYZSIZE, int XZSIZE, int XSIZE, int YSIZE, int ZSIZE, int ystart);
 //-----------------------------------------------------------------------------------------------
 __global__ void decenter_kernel(const RFLOAT* __restrict__  weight_D, RFLOAT* Fweight_D, int max_r2,
                                 int xdim, int ydim, int zdim, int xdim_weight, int ydim_weight,

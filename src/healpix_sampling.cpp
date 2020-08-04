@@ -882,6 +882,11 @@ void HealpixSampling::selectOrientationsWithNonZeroPriorProbability(
 	return;
 }
 #else
+#ifdef SELECT_PRINTOUT
+static int number = 0;
+#include <sys/types.h>
+#include <sys/syscall.h>
+#endif
 void HealpixSampling::selectOrientationsWithNonZeroPriorProbability(
 		RFLOAT prior_rot, RFLOAT prior_tilt, RFLOAT prior_psi,
 		RFLOAT sigma_rot, RFLOAT sigma_tilt, RFLOAT sigma_psi,
@@ -892,7 +897,30 @@ void HealpixSampling::selectOrientationsWithNonZeroPriorProbability(
 {
 	pointer_dir_nonzeroprior.clear();
 	directions_prior.clear();
-
+#ifdef SELECT_PRINTOUT
+        int pid = getpid();
+        pid_t tid = syscall(__NR_gettid);
+        char fn[50];
+        sprintf(fn,"select-psi_angles.%d.%d.%d.dat",number,pid,tid);
+        FILE* fp = fopen(fn,"w");
+        fprintf(fp, "%d\n",psi_angles.size());
+        for(int i=0;i<psi_angles.size();++i) fprintf(fp,"%lf,",psi_angles[i]);
+        fprintf(fp,"\n");
+        fclose(fp);
+        sprintf(fn,"select-rot_angles.%d.%d.%d.dat",number,pid,tid);
+        fp = fopen(fn, "w");
+        fprintf(fp, "%d\n",rot_angles.size());
+        for(int i=0;i<rot_angles.size();++i) fprintf(fp,"%lf,",rot_angles[i]);
+        fprintf(fp,"\n");
+        fclose(fp);
+        sprintf(fn,"select-tilt_angles.%d.%d.%d.dat",number,pid,tid);
+        fp = fopen(fn, "w");
+        fprintf(fp, "%d\n",tilt_angles.size());
+        for(int i=0;i<tilt_angles.size();++i) fprintf(fp,"%lf,",tilt_angles[i]);
+        fprintf(fp,"\n");
+        fclose(fp);
+        ++number;
+#endif
 	if (is_3D)
 	{
 		// Loop over all directions

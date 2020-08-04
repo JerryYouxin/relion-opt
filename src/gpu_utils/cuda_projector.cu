@@ -268,16 +268,7 @@ void CudaProjector::clear()
 
 void CudaProjector::clear()
 {
-	mdlX = 0;
-	mdlY = 0;
-	mdlZ = 0;
-	mdlXYZ = 0;
-	mdlInitY = 0;
-	mdlInitZ = 0;
-	mdlMaxR = 0;
-	padding_factor = 0;
-	allocaton_size = 0;
-
+	// destroy and free allocated memory first to avoid memory leak
 	if (mdlReal != 0)
 	{
 #ifndef CUDA_NO_TEXTURES
@@ -308,5 +299,14 @@ void CudaProjector::clear()
 		mdlReal = 0;
 		mdlImag = 0;
 	}
+	mdlX = 0;
+	mdlY = 0;
+	mdlZ = 0;
+	mdlXYZ = 0;
+	mdlInitY = 0;
+	mdlInitZ = 0;
+	mdlMaxR = 0;
+	padding_factor = 0;
+	allocaton_size = 0;
 }
 	#endif

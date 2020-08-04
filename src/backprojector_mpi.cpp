@@ -31,215 +31,7 @@
 	#define RCTIC(timer,label)
     #define RCTOC(timer,label)
 #endif
-
-void distributedWindow(DistributedFourierTransformer &transformer, MultidimArray<RFLOAT>& result, long int z0, long int y0, long int x0, long int zF, long int yF, long int xF) 
-{
-	long int zs = STARTINGZ(result)+transformer.local_0_start;
-	long int zf = zs + transformer.local_n0;
-	long int ys = STARTINGY(result);
-	long int yf = FINISHINGY(result);
-	long int xs = STARTINGX(result);
-	long int xf = FINISHINGX(result);
-	result.resize(zF - z0 + 1, yF - y0 + 1, xF - x0 + 1);
-    result.zinit = z0;
-    result.yinit = y0;
-    result.xinit = x0;
-	long int ks = z0 + transformer.local_0_start;
-	long int ke = ks + transformer.local_n0;
-	long int xdim = transformer.xdim;
-	long int ydim = transformer.ydim;
-	for (long int k = max(zs,z0); k <= min(zf,zF); k++)
-        for (long int i = y0; i <= yF; i++)
-            for (long int j = x0; j <= xF; j++)
-                if ((k >= zs && k <= zf) &&
-                    (i >= ys && i <= yf) &&
-                    (j >= xs && j <= xf))
-                    A3D_ELEM(result, k, i, j) = transformer.fReal_local[((k-zs)*ydim+(i-ys))*xdim+(j-xs)];
-                else
-                    A3D_ELEM(result, k, i, j) = 0;
-}
-
-void distributedCenterFFT(DistributedFourierTransformer &transformer, MultidimArray<RFLOAT>& v, bool forward)
-{
-	if ( v.getDim() == 3 )
-    {
-        // 3D
-        MultidimArray< RFLOAT > aux;
-		MultidimArray< RFLOAT > gv;
-        int l, shift;
-		gv.reshape(transformer.zdim,transformer.ydim,transformer.xdim);
-
-        // Shift in the X direction
-        l = XSIZE(v);
-        aux.reshape(l);
-        shift = (int)(l / 2);
-
-        if (!forward)
-            shift = -shift;
-
-		RFLOAT* local_data = transformer.fReal_local;
-		RFLOAT* aux_data = aux.data;
-		int xsize = transformer.xdim;
-		int ysize = transformer.ydim;
-		int zsize = transformer.zdim;
-		int ks = transformer.local_0_start;
-		int ke = transformer.local_0_start+transformer.local_n0;
-        for (int k = ks; k < ke; k++)
-            for (int i = 0; i < ysize; i++)
-            {
-                // Shift the input in an auxiliar vector
-                for (int j = 0; j < l; j++)
-                {
-                    int jp = j + shift;
-
-                    if (jp < 0)
-                        jp += l;
-                    else if (jp >= l)
-                        jp -= l;
-
-                    //aux(jp) = DIRECT_A3D_ELEM(v, k, i, j);
-					aux_data[jp] = local_data[(k*ysize+i)*xsize+j];
-                }
-
-                // Copy the vector
-                for (int j = 0; j < l; j++)
-                    //DIRECT_A3D_ELEM(gv, k, i, j) = DIRECT_A1D_ELEM(aux, j);
-					local_data[(k*ysize+i)*xsize+j] = aux[j];
-            }
-
-        // Shift in the Y direction
-        l = YSIZE(v);
-        aux.reshape(l);
-        shift = (int)(l / 2);
-
-		aux_data = aux.data;
-
-        if (!forward)
-            shift = -shift;
-
-        for (int k = ks; k < ke; k++)
-            for (int j = 0; j < xsize; j++)
-            {
-                // Shift the input in an auxiliar vector
-                for (int i = 0; i < l; i++)
-                {
-                    int ip = i + shift;
-
-                    if (ip < 0)
-                        ip += l;
-                    else if (ip >= l)
-                        ip -= l;
-
-                    //aux(ip) = DIRECT_A3D_ELEM(v, k, i, j);
-					aux_data[ip] = local_data[(k*ysize+i)*xsize+j];
-                }
-
-                // Copy the vector
-                for (int i = 0; i < l; i++)
-                    //DIRECT_A3D_ELEM(v, k, i, j) = DIRECT_A1D_ELEM(aux, i);
-					local_data[(k*ysize+i)*xsize+j] = aux_data[i];
-            }
-
-        // Shift in the Z direction
-        l = ZSIZE(v);
-        aux.reshape(l);
-        shift = (int)(l / 2);
-
-		aux_data = aux.data;
-
-        if (!forward)
-            shift = -shift;
-
-		int kps = ks + shift;
-		int kpe = ke + shift;
-		if(kps<0) 		  kps += l;
-		else if(kps >= l) kps -= l;
-		if(kpe<0) 		  kpe += l;
-		else if(kpe >= l) kpe -= l;
-		// Shift the input in an auxiliar vector
-        for (int k = ks; k < ke; k++)
-		{
-			int kp = k + shift;
-            if (kp < 0)
-                kp += l;
-            else if (kp >= l)
-                kp -= l;
-        	for (int i = 0; i < YSIZE(v); i++)
-            {
-				for (int j = 0; j < XSIZE(v); j++)
-                {
-                    // aux(kp) = DIRECT_A3D_ELEM(v, k, i, j);
-					gv[(kp*ysize+i)*xsize+j] = local_data[(k*ysize+i)*xsize+j];
-                }
-			}
-		}
-		int ns = transformer.size; 
-		if(kps<=kpe) {
-			for (int n=0;n<ns;++n) 
-			{	// Copy/Transfer the vector
-				// location should be distributed before this call
-				if(n==transformer.rank) continue;
-				int kns = transformer.dLocInfo[2*n];
-				int kne = transformer.dLocInfo[2*n]+transformer.dLocInfo[2*n+1];
-			
-				if(kps>=kns && kps<=kne) {
-					transformer.node->relion_MPI_ISend(&gv[kps*ysize*xsize],(kne-kps)*ysize*xsize,MY_MPI_DOUBLE,n,101,transformer.comm);
-				} else if(kps<kns && kpe>kns) {
-					transformer.node->relion_MPI_ISend(&gv[kns*ysize*xsize],(kpe-kns)*ysize*xsize,MY_MPI_DOUBLE,n,101,transformer.comm);
-				}
-			}
-		} else {
-			// 0...kpe (rank:0), kps...zsize (rank:size-1)
-			transformer.node->relion_MPI_ISend(gv,kpe*ysize*xsize,MY_MPI_DOUBLE,0,101,transformer.comm);
-			transformer.node->relion_MPI_ISend(&gv[kps*ysize*xsize],(zsize-kps)*ysize*xsize,MY_MPI_DOUBLE,ns-1,101,transformer.comm);
-		}
-		// if(n==transformer.rank)
-		{
-			int kns = transformer.local_0_start;
-			int kne = transformer.local_0_start+transformer.local_n0;
-			if(kps>=kns && kps<=kne) {
-				for (int k = kps; k < kne; k++)
-					for (int i = 0; i < ysize; i++)
-						for (int j = 0; j < xsize; j++)
-							local_data[(k*ysize+i)*xsize+j] = gv[(k*ysize+i)*xsize+j];
-			}
-		}
-		// recv
-		for (int n=0;n<ns;++n) 
-		{
-			if(n==transformer.rank) continue;
-			MPI_Status status;
-			int rks = transformer.dLocInfo[2*n];
-			int rke = transformer.dLocInfo[2*n]+transformer.dLocInfo[2*n+1];
-			int rkps = rks + shift;
-			int rkpe = rke + shift;
-			if(rkps<0) 		   rkps += l;
-			else if(rkps >= l) rkps -= l;
-			if(rkpe<0) 		   rkpe += l;
-			else if(rkpe >= l) rkpe -= l;
-			if(rkps<=rkpe) {
-				int kns = transformer.local_0_start;
-				int kne = transformer.local_0_start+transformer.local_n0;
-				if(rkps>=kns && rkps<=kne) {
-					transformer.node->relion_MPI_Recv(&local_data[(rkps-kns)*ysize*xsize],(kne-rkps)*ysize*xsize,MY_MPI_DOUBLE,n,101,transformer.comm, status);
-				} else if(rkps<kns && rkpe>kns) {
-					transformer.node->relion_MPI_Recv(local_data,(rkpe-kns)*ysize*xsize,MY_MPI_DOUBLE,n,101,transformer.comm, status);
-				}
-			} else {
-				if(transformer.rank==0)
-					transformer.node->relion_MPI_Recv(local_data,kpe*ysize*xsize,MY_MPI_DOUBLE,n,101,transformer.comm,status);
-				if(transformer.rank==size-1)
-					transformer.node->relion_MPI_Recv(&local_data[(rkps-transformer.local_0_start)*ysize*xsize],(zsize-kps)*ysize*xsize,MY_MPI_DOUBLE,n,101,transformer.comm,status);
-			}
-		}
-    }
-    else
-    {
-    	v.printShape();
-    	REPORT_ERROR("distributedCenterFFT ERROR: Dimension should be 3");
-    }
-}
-
+#include <omp.h>
 void BackProjectorMpi::reconstruct(MultidimArray<RFLOAT> &vol_out,
                                 int max_iter_preweight,
                                 bool do_map,
@@ -378,7 +170,8 @@ void BackProjectorMpi::reconstruct(MultidimArray<RFLOAT> &vol_out,
     RCTIC(ReconTimer,ReconS_1);
 	int sizes[7] = {XSIZE(vol_out),YSIZE(vol_out),ZSIZE(vol_out),XSIZE(tau2),XSIZE(sigma2),XSIZE(data_vs_prior),XSIZE(fourier_coverage)};
     FourierTransformer transformer;
-	DistributedFourierTransformer distributed_transformer(node,node->groupC, nr_threads);
+	//DistributedFourierTransformer distributed_transformer(node,node->groupC, nr_threads);
+	DistributedFourierTransformer distributed_transformer(node,node->groupC, 1);
 	MultidimArray<RFLOAT> Fweight;
 	// Fnewweight can become too large for a float: always keep this one in double-precision
 	MultidimArray<double> Fnewweight;
@@ -410,13 +203,13 @@ void BackProjectorMpi::reconstruct(MultidimArray<RFLOAT> &vol_out,
     // Set Fweight, Fnewweight and Fconv to the right size
     if (ref_dim == 2) {
         vol_out.setDimensions(pad_size, pad_size, 1, 1);
-		distributed_transformer.setSize(pad_size, pad_size, 1);
+		distributed_transformer.setSize(pad_size, pad_size, 1, true);
 	}
     else {
         // Too costly to actually allocate the space
         // Trick transformer with the right dimensions
         vol_out.setDimensions(pad_size, pad_size, pad_size, 1);
-		distributed_transformer.setSize(pad_size, pad_size, pad_size);
+		distributed_transformer.setSize(pad_size, pad_size, pad_size, true);
 	}
     transformer.setReal(vol_out); // Fake set real. 1. Allocate space for Fconv 2. calculate plans.
     vol_out.clear(); // Reset dimensions to 0
@@ -644,29 +437,51 @@ void BackProjectorMpi::reconstruct(MultidimArray<RFLOAT> &vol_out,
 			int fysize = distributed_transformer.ydim;
 			int fxsize = distributed_transformer.xdim / 2 + 1;
 			int xysize = fxsize * fysize;
-			for(int k=0;k<distributed_transformer.local_n0;++k)
-				for(int i=0;i<fysize;++i)
+			int xzsize = fxsize * fzsize;
+			//#pragma omp parallel for
+			//for(int k=0;k<distributed_transformer.local_n0;++k)
+			//	for(int i=0;i<fysize;++i)
+			//printf("== %d %d, %d %d\n",distributed_transformer.local_0_start,distributed_transformer.local_n0,distributed_transformer.local_1_start, distributed_transformer.local_n1);
+			for(int i=0;i<distributed_transformer.local_n1;++i)
+				for(int k=0;k<fzsize;++k)
 					for(int j=0;j<fxsize;++j) 
 			{
-				int kk = k+distributed_transformer.local_0_start;
-				distributed_transformer.fFourier_local[k*xysize+i*fxsize+j] = 
-					DIRECT_A3D_ELEM(Fnewweight, kk, i, j) * DIRECT_A3D_ELEM(Fweight, kk, i, j);
+				int ii = i+distributed_transformer.local_1_start;
+				distributed_transformer.fFourier_local[i*xzsize+k*fxsize+j] = 
+					DIRECT_A3D_ELEM(Fnewweight, ii, k, j) * DIRECT_A3D_ELEM(Fweight, ii, k, j);
 			}
 			// convolute through Fourier-transform (as both grids are rectangular)
 			// Note that convoluteRealSpace acts on the complex array inside the transformer
 			convoluteBlobRealSpace(distributed_transformer);
 
 			RFLOAT w, corr_min = LARGE_NUMBER, corr_max = -LARGE_NUMBER, corr_avg=0., corr_nn=0.;
-			for (long int k = 0, kp = (distributed_transformer.local_0_start<fxsize?distributed_transformer.local_0_start:distributed_transformer.local_0_start-fzsize); k<distributed_transformer.local_n0; k++, kp = (kp+1 < fxsize) ? kp+1 : kp+1 - fzsize)
-    			for (long int i = 0, ip = 0 ; i<fysize; i++, ip = (i < fxsize) ? i : i - fysize)
+			//for (long int k = 0, kp = (distributed_transformer.local_0_start+k<fxsize?distributed_transformer.local_0_start+k:distributed_transformer.local_0_start+k-fzsize); k<distributed_transformer.local_n0; k++, kp = (kp+1 < fxsize) ? kp+1 : kp+1 - fzsize)
+    			//for (long int i = 0, ip = 0 ; i<fysize; i++, ip = (i < fxsize) ? i : i - fysize)
+			for (long int i = 0, ip = (distributed_transformer.local_1_start+i<fxsize?distributed_transformer.local_1_start+i:distributed_transformer.local_1_start+i-fysize); i<distributed_transformer.local_n1; i++, ip = (ip+1 < fxsize) ? ip+1 : ip+1 - fysize)
+    			for (long int k = 0, kp = 0 ; k<fzsize; k++, kp = (k < fxsize) ? k : k - fzsize)
     				for (long int j = 0, jp = 0; j<fxsize; j++, jp = j)
+    			//int kstart = distributed_transformer.local_0_start;
+			//int knum   = distributed_transformer.local_n0;
+			//int fconv_size = knum*fxsize*fysize;
+			//#pragma omp parallel firstprivate(kstart,fxsize, fysize, fzsize, fconv_size)
 			{
-				if (kp * kp + ip * ip + jp * jp < max_r2) {
-					// Make sure no division by zero can occur....
-					w = XMIPP_MAX(1e-6, abs(distributed_transformer.fFourier_local[k*xysize+i*fxsize+j]));
-					// Apply division of Eq. [14] in Pipe & Menon (1999)
-					DIRECT_A3D_ELEM(Fnewweight, k+distributed_transformer.local_0_start, i, j) /= w;
-				}
+			//	int tid = omp_get_thread_num();
+			//	int tnum= omp_get_num_threads();
+			//	for(int id=tid;id<fconv_size;id+=tnum) {
+			//		int k  = id / (fxsize*fysize);
+			//		int i  =(id % (fxsize*fysize)) / fxsize;
+			//		int j  = id % fxsize;
+			//		int k1 = k + kstart;
+			//		int kp = (k1 < fxsize) ? k1 : k1 - fzsize;
+			//		int ip = (i < fxsize) ? i : i - fysize;
+			//		int jp =  j;
+					if (kp * kp + ip * ip + jp * jp < max_r2) {
+						// Make sure no division by zero can occur....
+						w = XMIPP_MAX(1e-6, abs(distributed_transformer.fFourier_local[i*xzsize+k*fxsize+j]));
+						// Apply division of Eq. [14] in Pipe & Menon (1999)
+						DIRECT_A3D_ELEM(Fnewweight, i+distributed_transformer.local_1_start,k, j) /= w;
+					}
+			//	}
 			}
 			RCTOC(ReconTimer,ReconS_6);
 	#ifdef DEBUG_RECONSTRUCT
@@ -693,9 +508,9 @@ void BackProjectorMpi::reconstruct(MultidimArray<RFLOAT> &vol_out,
 			MPI_Request request;
 			MPI_Status status;
 	#ifdef RELION_SINGLE_PRECISION
-			node->relion_MPI_Send(&(DIRECT_A3D_ELEM(Fnewweight,distributed_transformer.local_0_start,0,0)), distributed_transformer.local_n0*sz, MPI_FLOAT, 0, 100, distributed_transformer.comm);
+			node->relion_MPI_Send(&(DIRECT_A3D_ELEM(Fnewweight,distributed_transformer.local_1_start,0,0)), distributed_transformer.local_n1*sz, MPI_FLOAT, 0, 100, distributed_transformer.comm);
 	#else
-			node->relion_MPI_Send(&(DIRECT_A3D_ELEM(Fnewweight,distributed_transformer.local_0_start,0,0)), distributed_transformer.local_n0*sz, MPI_DOUBLE, 0, 100, distributed_transformer.comm);
+			node->relion_MPI_Send(&(DIRECT_A3D_ELEM(Fnewweight,distributed_transformer.local_1_start,0,0)), distributed_transformer.local_n1*sz, MPI_DOUBLE, 0, 100, distributed_transformer.comm);
 	#endif
 		}
 		MPI_Barrier(distributed_transformer.comm);
@@ -719,43 +534,23 @@ void BackProjectorMpi::reconstruct(MultidimArray<RFLOAT> &vol_out,
 
 		// Now do the actual reconstruction with the data array
 		// Apply the iteratively determined weight
-	// 	Fconv.initZeros(); // to remove any stuff from the input volume
-	// 	if(node->grp_rank==0) {
-	// 		// Go from projector-centered to FFTW-uncentered
-	// 		// Only master of group do this work
-	// 		decenter(data, Fconv, max_r2);
-	// 		FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(Fconv)
-	// 		{
-	// #ifdef  RELION_SINGLE_PRECISION
-	// 			// Prevent numerical instabilities in single-precision reconstruction with very unevenly sampled orientations
-	// 			if (DIRECT_MULTIDIM_ELEM(Fnewweight, n) > 1e20)
-	// 				DIRECT_MULTIDIM_ELEM(Fnewweight, n) = 1e20;
-	// #endif
-	// 			DIRECT_MULTIDIM_ELEM(Fconv, n) *= DIRECT_MULTIDIM_ELEM(Fnewweight, n);
-	// 		}
-	// 	}
-		{
-			int fzsize = distributed_transformer.zdim;
-			int fysize = distributed_transformer.ydim;
-			int fxsize = distributed_transformer.xdim / 2 + 1;
-			int xysize = fxsize * fysize;
-			for (long int k = 0, kp = (distributed_transformer.local_0_start<fxsize?distributed_transformer.local_0_start:distributed_transformer.local_0_start-fzsize); k<distributed_transformer.local_n0; k++, kp = (kp+1 < fxsize) ? kp+1 : kp+1 - fzsize)
-    			for (long int i = 0, ip = 0 ; i<fysize; i++, ip = (i < fxsize) ? i : i - fysize)
-    				for (long int j = 0, jp = 0; j<fxsize; j++, jp = j)
+		Fconv.initZeros(); // to remove any stuff from the input volume
+		if(node->grp_rank==0) {
+			// Go from projector-centered to FFTW-uncentered
+			// Only master of group do this work
+			decenter(data, Fconv, max_r2);
+			FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(Fconv)
 			{
-#ifdef  RELION_SINGLE_PRECISION
+	#ifdef  RELION_SINGLE_PRECISION
 				// Prevent numerical instabilities in single-precision reconstruction with very unevenly sampled orientations
-				if (DIRECT_A3D_ELEM(Fnewweight, k+distributed_transformer.local_0_start, i, j) > 1e20)
-					DIRECT_A3D_ELEM(Fnewweight, k+distributed_transformer.local_0_start, i, j) = 1e20;
-#endif
-				if (kp*kp + ip*ip + jp*jp <= max_r2)
-					distributed_transformer.fFourier_local[k*xysize+i*fxsize+j] = A3D_ELEM(data, kp, ip, jp)*DIRECT_A3D_ELEM(Fnewweight, k+distributed_transformer.local_0_start, i, j);
-				else
-					distributed_transformer.fFourier_local[k*xysize+i*fxsize+j] = 0.0;
+				if (DIRECT_MULTIDIM_ELEM(Fnewweight, n) > 1e20)
+					DIRECT_MULTIDIM_ELEM(Fnewweight, n) = 1e20;
+	#endif
+				DIRECT_MULTIDIM_ELEM(Fconv, n) *= DIRECT_MULTIDIM_ELEM(Fnewweight, n);
 			}
 		}
 		// broadcast
-		//node->relion_MPI_Bcast(MULTIDIM_ARRAY(Fconv), MULTIDIM_SIZE(Fconv), MY_MPI_COMPLEX, 0, node->groupC);
+		node->relion_MPI_Bcast(MULTIDIM_ARRAY(Fconv), MULTIDIM_SIZE(Fconv), MY_MPI_COMPLEX, 0, node->groupC);
 		// Clear memory
 		Fnewweight.clear();
 		RCTOC(ReconTimer,ReconS_7);
@@ -765,7 +560,7 @@ void BackProjectorMpi::reconstruct(MultidimArray<RFLOAT> &vol_out,
 	// Pass the transformer to prevent making and clearing a new one before clearing the one declared above....
 	// The latter may give memory problems as detected by electric fence....
 	RCTIC(ReconTimer,ReconS_17);
-	//distributed_transformer.setFourier(Fconv);
+	distributed_transformer.setFourier(Fconv);
 	windowToOridimRealSpace(distributed_transformer, vol_out, nr_threads, printTimes);
 	transformer.fReal = NULL; // Make sure to re-calculate fftw plan
 	RCTOC(ReconTimer,ReconS_17);
@@ -857,6 +652,11 @@ void BackProjectorMpi::convoluteBlobRealSpace(DistributedFourierTransformer& tra
 	long int kend = transformer.local_0_start+transformer.local_n0;
 	long int fxdim = 2*(transformer.xdim/2+1);
 	long int xydim = fxdim * transformer.zdim;
+        long int local_n0 = transformer.local_n0;
+        long int ydim = transformer.ydim;
+        long int xdim = transformer.xdim;
+        RFLOAT* fReal_local = transformer.fReal_local;
+        #pragma omp parallel for
 	for (long int k=0; k<transformer.local_n0; k++)
         for (long int i=0; i<transformer.ydim; i++)
 			for (long int j=0; j<transformer.xdim; j++)
@@ -877,6 +677,247 @@ void BackProjectorMpi::convoluteBlobRealSpace(DistributedFourierTransformer& tra
 
     // forward FFT to go back to Fourier-space
     transformer.FourierTransform();
+}
+
+#if 0
+
+#define max(a,b) (((a)>(b))?(a):(b))
+#define min(a,b) (((a)<(b))?(a):(b))
+void distributedWindow(DistributedFourierTransformer &transformer, MultidimArray<RFLOAT>& result, long int z0, long int y0, long int x0, long int zF, long int yF, long int xF) 
+{
+	long int zs = STARTINGZ(result)+transformer.local_0_start;
+	long int zf = zs + transformer.local_n0;
+	long int ys = STARTINGY(result);
+	long int yf = FINISHINGY(result);
+	long int xs = STARTINGX(result);
+	long int xf = FINISHINGX(result);
+	result.resize(zF - z0 + 1, yF - y0 + 1, xF - x0 + 1);
+    result.zinit = z0;
+    result.yinit = y0;
+    result.xinit = x0;
+	long int ks = z0 + transformer.local_0_start;
+	long int ke = ks + transformer.local_n0;
+	long int xdim = transformer.xdim;
+	long int ydim = transformer.ydim;
+	for (long int k = max(zs,z0); k <= min(zf,zF); k++)
+        for (long int i = y0; i <= yF; i++)
+            for (long int j = x0; j <= xF; j++)
+                if ((k >= zs && k <= zf) &&
+                    (i >= ys && i <= yf) &&
+                    (j >= xs && j <= xf))
+                    A3D_ELEM(result, k, i, j) = transformer.fReal_local[((k-zs)*ydim+(i-ys))*xdim+(j-xs)];
+                else
+                    A3D_ELEM(result, k, i, j) = 0;
+}
+
+void distributedCenterFFT(DistributedFourierTransformer &transformer, MultidimArray<RFLOAT>& v, bool forward)
+{
+	if ( v.getDim() == 3 )
+    {
+        // 3D
+        MultidimArray< RFLOAT > aux;
+		MultidimArray< RFLOAT > gv;
+        int l, shift;
+		gv.reshape(transformer.zdim,transformer.ydim,transformer.xdim);
+
+        // Shift in the X direction
+        l = XSIZE(v);
+        aux.reshape(l);
+        shift = (int)(l / 2);
+
+        if (!forward)
+            shift = -shift;
+
+		RFLOAT* local_data = transformer.fReal_local;
+		RFLOAT* aux_data = aux.data;
+		int xsize = transformer.xdim;
+		int ysize = transformer.ydim;
+		int zsize = transformer.zdim;
+		int ks = transformer.local_0_start;
+		int ke = transformer.local_0_start+transformer.local_n0;
+        for (int k = ks; k < ke; k++)
+            for (int i = 0; i < ysize; i++)
+            {
+                // Shift the input in an auxiliar vector
+                for (int j = 0; j < l; j++)
+                {
+                    int jp = j + shift;
+
+                    if (jp < 0)
+                        jp += l;
+                    else if (jp >= l)
+                        jp -= l;
+
+                    //aux(jp) = DIRECT_A3D_ELEM(v, k, i, j);
+					aux_data[jp] = local_data[(k*ysize+i)*xsize+j];
+                }
+
+                // Copy the vector
+                for (int j = 0; j < l; j++)
+                    //DIRECT_A3D_ELEM(gv, k, i, j) = DIRECT_A1D_ELEM(aux, j);
+					local_data[(k*ysize+i)*xsize+j] = aux_data[j];
+            }
+
+        // Shift in the Y direction
+        l = YSIZE(v);
+        aux.reshape(l);
+        shift = (int)(l / 2);
+
+		aux_data = aux.data;
+
+        if (!forward)
+            shift = -shift;
+
+        for (int k = ks; k < ke; k++)
+            for (int j = 0; j < xsize; j++)
+            {
+                // Shift the input in an auxiliar vector
+                for (int i = 0; i < l; i++)
+                {
+                    int ip = i + shift;
+
+                    if (ip < 0)
+                        ip += l;
+                    else if (ip >= l)
+                        ip -= l;
+
+                    //aux(ip) = DIRECT_A3D_ELEM(v, k, i, j);
+					aux_data[ip] = local_data[(k*ysize+i)*xsize+j];
+                }
+
+                // Copy the vector
+                for (int i = 0; i < l; i++)
+                    //DIRECT_A3D_ELEM(v, k, i, j) = DIRECT_A1D_ELEM(aux, i);
+					local_data[(k*ysize+i)*xsize+j] = aux_data[i];
+            }
+
+        // Shift in the Z direction
+        l = ZSIZE(v);
+        aux.reshape(l);
+        shift = (int)(l / 2);
+
+		aux_data = aux.data;
+
+        if (!forward)
+            shift = -shift;
+
+		int kps = ks + shift;
+		int kpe = ke + shift;
+		if(kps<0) 		  kps += l;
+		else if(kps >= l) kps -= l;
+		if(kpe<0) 		  kpe += l;
+		else if(kpe >= l) kpe -= l;
+		// Shift the input in an auxiliar vector
+		std::cout << std::endl << transformer.node->rank << " Begin CenterFFT::K enter..." << std::endl;
+        for (int k = ks; k < ke; k++)
+		{
+			int kp = k + shift;
+            if (kp < 0)
+                kp += l;
+            else if (kp >= l)
+                kp -= l;
+        	for (int i = 0; i < YSIZE(v); i++)
+            {
+				for (int j = 0; j < XSIZE(v); j++)
+                {
+                    // aux(kp) = DIRECT_A3D_ELEM(v, k, i, j);
+					gv.data[(kp*ysize+i)*xsize+j] = local_data[(k*ysize+i)*xsize+j];
+                }
+			}
+		}
+		//std::cout << std::endl << transformer.node->rank << " Begin CenterFFT::K exit..." << std::endl;
+		int ns = transformer.size; 
+			printf("++ kps %d kpe %d\n",kps, kpe);
+                transformer.distribute_location();
+		if(kps<=kpe) {
+			for (int n=0;n<ns;++n) 
+			{	// Copy/Transfer the vector
+				// location should be distributed before this call
+				if(n==transformer.rank) continue;
+				int kns = transformer.dLocInfo[2*n];
+				int kne = transformer.dLocInfo[2*n]+transformer.dLocInfo[2*n+1];
+			printf("++ Rank %d :  kns %d kne %d\n", transformer.rank,kns,kne);
+			
+				if(kps>=kns && kps<kne) {
+					printf("++ Rank %d : sending to %d from %d with %d data\n",transformer.rank,n,kps,(kne-kps)*ysize*xsize);
+					transformer.node->relion_MPI_ISend(&(gv.data[kps*ysize*xsize]),(kne-kps)*ysize*xsize,MY_MPI_DOUBLE,n,101,transformer.comm);
+				} else if(kps<kns && kpe>kns) {
+					printf("++ Rank %d : sending to %d from %d with %d data\n",transformer.rank,n,kns,(kpe-kns)*ysize*xsize);
+					transformer.node->relion_MPI_ISend(&(gv.data[kns*ysize*xsize]),(kpe-kns)*ysize*xsize,MY_MPI_DOUBLE,n,101,transformer.comm);
+				}
+			}
+		} else {
+			// 0...kpe (rank:0), kps...zsize (rank:size-1)
+			if(kpe>0) {
+				printf("++ Rank %d : sending to %d from %d with %d data\n",transformer.rank,0,0,(kpe)*ysize*xsize);
+				transformer.node->relion_MPI_ISend(gv.data,kpe*ysize*xsize,MY_MPI_DOUBLE,0,101,transformer.comm);
+			}
+			if(kps>0) {
+				printf("++ Rank %d : sending to %d from %d with %d data\n",transformer.rank,ns-1,kps,(zsize-kps)*ysize*xsize);
+				transformer.node->relion_MPI_ISend(&(gv.data[kps*ysize*xsize]),(zsize-kps)*ysize*xsize,MY_MPI_DOUBLE,ns-1,101,transformer.comm);
+			}
+		}
+	MPI_Barrier(transformer.comm);
+		std::cout << std::endl << transformer.node->rank << " Begin CenterFFT::K copying..." << std::endl;
+		// if(n==transformer.rank)
+		{
+			int kns = transformer.local_0_start;
+			int kne = transformer.local_0_start+transformer.local_n0;
+			if(kps>=kns && kps<=kne) {
+				for (int k = kps; k < kne; k++)
+					for (int i = 0; i < ysize; i++)
+						for (int j = 0; j < xsize; j++)
+							local_data[(k*ysize+i)*xsize+j] = gv.data[(k*ysize+i)*xsize+j];
+			}
+		}
+	MPI_Barrier(transformer.comm);
+		std::cout << std::endl << transformer.node->rank << " Begin CenterFFT::K recving..." << std::endl;
+		// recv
+		MPI_Status status;
+		for (int n=0;n<ns;++n) 
+		{
+			if(n==transformer.rank) continue;
+			int rks = transformer.dLocInfo[2*n];
+			int rke = transformer.dLocInfo[2*n]+transformer.dLocInfo[2*n+1];
+			int rkps = rks + shift;
+			int rkpe = rke + shift;
+			if(rkps<0) 		   rkps += l;
+			else if(rkps >= l) rkps -= l;
+			if(rkpe<0) 		   rkpe += l;
+			else if(rkpe >= l) rkpe -= l;
+			printf("++ Rank %d : rkps %d rkpe %d rks %d rke %d\n", transformer.rank,rkps, rkpe,rks, rke);
+			if(rkps<=rkpe) {
+				int kns = transformer.local_0_start;
+				int kne = transformer.local_0_start+transformer.local_n0;
+				if(rkps>=kns && rkps<kne) {
+					printf("++ Rank %d : recving from %d to %d with %d data\n",transformer.rank,n,rkps-kns,(kne-rkps)*ysize*xsize);
+					transformer.node->relion_MPI_IRecv(&local_data[(rkps-kns)*ysize*xsize],(kne-rkps)*ysize*xsize,MY_MPI_DOUBLE,n,101,transformer.comm);
+				} else if(rkps<kns && rkpe>kns) {
+					printf("++ Rank %d : recving from %d to %d with %d data\n",transformer.rank,n,0,(rkpe-kns)*ysize*xsize);
+					transformer.node->relion_MPI_IRecv(local_data,(rkpe-kns)*ysize*xsize,MY_MPI_DOUBLE,n,101,transformer.comm);
+				}
+			} else {
+				int kns = transformer.local_0_start;
+				int kne = transformer.local_0_start+transformer.local_n0;
+				if(transformer.rank==0 && rkpe>0) {
+					printf("++ Rank %d : recving from %d to %d with %d data\n",transformer.rank,n,0,(rkpe-kns)*ysize*xsize);
+					transformer.node->relion_MPI_IRecv(local_data,rkpe*ysize*xsize,MY_MPI_DOUBLE,n,101,transformer.comm);
+				}
+				if(transformer.rank==transformer.size-1 && rkps<zsize) {
+					printf("++ Rank %d : recving from %d to %d with %d data\n",transformer.rank,n,rkps-kns,(zsize-rkps)*ysize*xsize);
+					transformer.node->relion_MPI_IRecv(&local_data[(rkps-kns)*ysize*xsize],(zsize-rkps)*ysize*xsize,MY_MPI_DOUBLE,n,101,transformer.comm);
+				}
+			}
+		}
+                transformer.node->relion_MPI_WaitAll(status);
+		std::cout << std::endl << transformer.node->rank << " Begin CenterFFT::K exit..." << std::endl;
+    }
+    else
+    {
+    	v.printShape();
+    	REPORT_ERROR("distributedCenterFFT ERROR: Dimension should be 3");
+    }
+    MPI_Barrier(transformer.comm);
 }
 
 void BackProjectorMpi::windowToOridimRealSpace(DistributedFourierTransformer &transformer, MultidimArray<RFLOAT> &Mout, int nr_threads, bool printTimes)
@@ -901,7 +942,6 @@ void BackProjectorMpi::windowToOridimRealSpace(DistributedFourierTransformer &tr
 	MultidimArray<Complex>& Fin = transformer.getFourierReference();
 	RCTOC(OriDimTimer,OriDim1);
 	RCTIC(OriDimTimer,OriDim2);
-	MultidimArray<Complex > Ftmp;
 	// Size of padded real-space volume
 	int padoridim = ROUND(padding_factor * ori_size);
 	// make sure padoridim is even
@@ -958,16 +998,6 @@ void BackProjectorMpi::windowToOridimRealSpace(DistributedFourierTransformer &tr
 	RCTIC(OriDimTimer,OriDim4);
     //transformer.setReal(Mout);
 	transformer.setSize(XSIZE(Mout),YSIZE(Mout),ZSIZE(Mout));
-	// // now WINDOW
-	// {
-	// 	long int max_r2 = (ixsize -1) * (ixsize - 1);
-    //     FOR_ALL_ELEMENTS_IN_FFTW_TRANSFORM(in)
-    //     {
-    //         // Make sure windowed FT has nothing in the corners, otherwise we end up with an asymmetric FT!
-    //         if (kp*kp + ip*ip + jp*jp <= max_r2)
-    //             FFTW_ELEM(out, kp, ip, jp) = FFTW_ELEM(in, kp, ip, jp);
-    //     }
-	// }
 	transformer.distribute(DISTRIBUTE_FOURIER);
 	RCTOC(OriDimTimer,OriDim4);
 	RCTIC(OriDimTimer,OriDim5);
@@ -988,13 +1018,15 @@ void BackProjectorMpi::windowToOridimRealSpace(DistributedFourierTransformer &tr
 	// if(transformer.rank==0) {
 		RCTIC(OriDimTimer,OriDim5_2);
     	Fin.clear();
-		// delete transformer.fReal;
+	//	 delete transformer.fReal;
     	// transformer.fReal = NULL; // Make sure to re-calculate fftw plan
 		Mout.setXmippOrigin();
 		RCTOC(OriDimTimer,OriDim5_2);
 		// Shift the map back to its origin
+		std::cout << std::endl << transformer.node->rank << " Begin CenterFFT..." << std::endl;
 		RCTIC(OriDimTimer,OriDim6);
 		distributedCenterFFT(transformer,Mout,true);
+	MPI_Barrier(transformer.comm);
 		RCTOC(OriDimTimer,OriDim6);
 #ifdef DEBUG_WINDOWORIDIMREALSPACE
 		tt()=Mout;
@@ -1003,12 +1035,13 @@ void BackProjectorMpi::windowToOridimRealSpace(DistributedFourierTransformer &tr
 
 		// Window in real-space
 		RCTIC(OriDimTimer,OriDim7);
-		long int zs = STARTINGZ(result);
-		long int zf = FINISHINGZ(result);
-		long int ys = STARTINGY(result);
-		long int yf = FINISHINGY(result);
-		long int xs = STARTINGX(result);
-		long int xf = FINISHINGX(result);
+		long int zs = STARTINGZ(Mout);
+		long int zf = FINISHINGZ(Mout);
+		long int ys = STARTINGY(Mout);
+		long int yf = FINISHINGY(Mout);
+		long int xs = STARTINGX(Mout);
+		long int xf = FINISHINGX(Mout);
+		std::cout << std::endl << transformer.node->rank << " Begin Window..." << std::endl;
 		if (ref_dim==2)
 		{
 			//Mout.window(FIRST_XMIPP_INDEX(ori_size), FIRST_XMIPP_INDEX(ori_size),
@@ -1022,6 +1055,7 @@ void BackProjectorMpi::windowToOridimRealSpace(DistributedFourierTransformer &tr
 			// 	       	LAST_XMIPP_INDEX(ori_size), LAST_XMIPP_INDEX(ori_size), LAST_XMIPP_INDEX(ori_size));
 			distributedWindow(transformer, Mout, FIRST_XMIPP_INDEX(ori_size), FIRST_XMIPP_INDEX(ori_size), FIRST_XMIPP_INDEX(ori_size),LAST_XMIPP_INDEX(ori_size), LAST_XMIPP_INDEX(ori_size), LAST_XMIPP_INDEX(ori_size));
 		}
+	MPI_Barrier(transformer.comm);
 		Mout.setXmippOrigin();
 		RCTOC(OriDimTimer,OriDim7);
 		// Normalisation factor of FFTW
@@ -1035,19 +1069,27 @@ void BackProjectorMpi::windowToOridimRealSpace(DistributedFourierTransformer &tr
 #endif
 		// MERGE 
 		RCTIC(OriDimTimer,OriDim5_1);
-		//std::cout << std::endl << transformer.rank << " Begin Merging..." << std::endl;
+	MPI_Barrier(transformer.comm);
+		std::cout << std::endl << transformer.node->rank << " Begin Merging..." << std::endl;
 		//transformer.mergeTo(Mout);
 		long int yxsize= YXSIZE(Mout);
 		if(transformer.rank==0) {
 			MPI_Status status;
 			for(int n=1;n<transformer.size;++n) {
-				long int start = zs + transformer.dLocInfo[2*n];
+				long int start = zs + transformer.dLocInfo[2*n] - STARTINGZ(Mout);
 				long int end   = start + transformer.dLocInfo[2*n+1];
-				long int len   = transformer.dLocInfo[2*n+1];
-				transformer.node->relion_MPI_IRecv(&(Mout.data[start*yxsize]),len*yxsize,MY_MPI_DOUBLE,n,201,transformer.comm, status);	
+				start = max(start,0);
+				end   = min(max(end,0),ZSIZE(Mout));
+				//long int len   = transformer.dLocInfo[2*n+1];
+				long int len = end - start;
+				if(len>0) {
+					printf("Rank %d : Recving from %d from %d to %d, len=%d\n",transformer.node->rank,n,start, end,len);
+					transformer.node->relion_MPI_IRecv(&(Mout.data[start*yxsize]),len*yxsize,MY_MPI_DOUBLE,n,201,transformer.comm);	
+				}
 			}
-			zs = zs + transformer.local_0_start;
+			zs = zs + transformer.local_0_start - STARTINGZ(Mout);
 			zf = zs + transformer.local_n0;
+                        int x0,y0,z0,xF,yF,zF;
 			y0 = x0 = FIRST_XMIPP_INDEX(ori_size);
 			yF = xF = LAST_XMIPP_INDEX(ori_size);
 			if(ref_dim==2) {
@@ -1058,28 +1100,38 @@ void BackProjectorMpi::windowToOridimRealSpace(DistributedFourierTransformer &tr
 			for (long int k = z0; k < max(zs,z0); k++)
 				for (long int i = y0; i <= yF; i++)
 					for (long int j = x0; j <= xF; j++)
-						A3D_ELEM(Mconv, k, i, j) = 0;
+						A3D_ELEM(Mout, k, i, j) = 0;
 			for (long int k = min(zf,zF)+1; k < zF; k++)
 				for (long int i = y0; i <= yF; i++)
 					for (long int j = x0; j <= xF; j++)
-						A3D_ELEM(Mconv, k, i, j) = 0;
+						A3D_ELEM(Mout, k, i, j) = 0;
+			printf("Now waiting for all recv done...\n");
 			transformer.node->relion_MPI_WaitAll(status);
 		} else {
-			long int start = zs + transformer.local_0_start;
+			long int start = zs + transformer.local_0_start - STARTINGZ(Mout);
 			long int end   = start + transformer.local_n0;
-			long int len   = transformer.local_n0;
-			transformer.node->relion_MPI_Send(&(Mout.data[start*yxsize]),len*yxsize,MY_MPI_DOUBLE,0,201,transformer.comm);
+			start = max(start,0);
+			end   = min(max(end,0),ZSIZE(Mout));
+			long int len   = end-start;
+			if(len>0) {
+				printf("Rank %d : Sending to 0 from %d to %d, len=%d\n",transformer.node->rank,start,end,len);
+				transformer.node->relion_MPI_Send(&(Mout.data[start*yxsize]),len*yxsize,MY_MPI_DOUBLE,0,201,transformer.comm);
+			}
+			printf("Rank %d : Send Finish!\n",transformer.node->rank);
 		}
-		RCTOC(OriDimTimer,OriDim5_1);
-		if(transformer.rank==0) {
-		// Mask out corners to prevent aliasing artefacts
-		RCTIC(OriDimTimer,OriDim9);
-		softMaskOutsideMap(Mout);
-		RCTOC(OriDimTimer,OriDim9);
-		}
-		// finalise
+	MPI_Barrier(transformer.comm);
+	printf("DELETE TRANSFORMER FREAL %d\n",transformer.rank); fflush(stdout);
 		delete transformer.fReal;
-		transformer.fReal = NULL; // Make sure to re-calculate fftw plan
+		printf("DELETE TRANSFORMER FREAL %d COMPLETE\n",transformer.rank); fflush(stdout);
+    	transformer.fReal = NULL; // Make sure to re-calculate fftw plan
+		RCTOC(OriDimTimer,OriDim5_1);
+		// finalise
+		if(transformer.rank==0) {
+			// Mask out corners to prevent aliasing artefacts
+			RCTIC(OriDimTimer,OriDim9);
+			softMaskOutsideMap(Mout);
+			RCTOC(OriDimTimer,OriDim9);
+		}
 
 #ifdef DEBUG_WINDOWORIDIMREALSPACE
 		tt()=Mout;
@@ -1105,3 +1157,171 @@ void BackProjectorMpi::windowToOridimRealSpace(DistributedFourierTransformer &tr
 	// }
 	MPI_Barrier(transformer.comm);
 }
+
+#else
+
+void BackProjectorMpi::windowToOridimRealSpace(DistributedFourierTransformer &transformer, MultidimArray<RFLOAT> &Mout, int nr_threads, bool printTimes)
+{
+
+#ifdef TIMING
+	Timer OriDimTimer;
+	int OriDim1  = OriDimTimer.setNew(" OrD1_getFourier_MPI ");
+	int OriDim2  = OriDimTimer.setNew(" OrD2_windowFFT_MPI ");
+	int OriDim3  = OriDimTimer.setNew(" OrD3_reshape_MPI ");
+	int OriDim4  = OriDimTimer.setNew(" OrD4_setReal_MPI ");
+	int OriDim5  = OriDimTimer.setNew(" OrD5_invFFT_MPI ");
+	int OriDim5_1  = OriDimTimer.setNew(" OrD5_1_merge_MPI ");
+	int OriDim5_2  = OriDimTimer.setNew(" OrD5_2_copy_MPI ");
+	int OriDim6  = OriDimTimer.setNew(" OrD6_centerFFT_MPI ");
+	int OriDim7  = OriDimTimer.setNew(" OrD7_window_MPI ");
+	int OriDim8  = OriDimTimer.setNew(" OrD8_norm_MPI ");
+	int OriDim9  = OriDimTimer.setNew(" OrD9_softMask_MPI ");
+#endif
+
+	RCTIC(OriDimTimer,OriDim1);
+	MultidimArray<Complex>& Fin = transformer.getFourierReference();
+	RCTOC(OriDimTimer,OriDim1);
+	RCTIC(OriDimTimer,OriDim2);
+	MultidimArray<Complex > Ftmp;
+	// Size of padded real-space volume
+	int padoridim = ROUND(padding_factor * ori_size);
+	// make sure padoridim is even
+	padoridim += padoridim%2;
+	RFLOAT normfft;
+
+#ifdef DEBUG_WINDOWORIDIMREALSPACE
+	Image<RFLOAT> tt;
+	tt().reshape(ZSIZE(Fin), YSIZE(Fin), XSIZE(Fin));
+	FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(Fin)
+	{
+		DIRECT_MULTIDIM_ELEM(tt(), n) = abs(DIRECT_MULTIDIM_ELEM(Fin, n));
+	}
+	tt.write("windoworidim_Fin.spi");
+#endif
+
+    // Resize incoming complex array to the correct size
+	//Fin.printShape();
+	//printf("Node %d : padoridim=%d\n",node->rank,padoridim);
+	windowFourierTransform(Fin, padoridim);
+	RCTOC(OriDimTimer,OriDim2);
+	RCTIC(OriDimTimer,OriDim3);
+ 	if (ref_dim == 2)
+	{
+		Mout.reshape(padoridim, padoridim);
+		normfft = (RFLOAT)(padding_factor * padding_factor);
+	}
+	else
+	{
+		Mout.reshape(padoridim, padoridim, padoridim);
+		if (data_dim == 3)
+			normfft = (RFLOAT)(padding_factor * padding_factor * padding_factor);
+		else
+			normfft = (RFLOAT)(padding_factor * padding_factor * padding_factor * ori_size);
+	}
+	Mout.setXmippOrigin();
+	RCTOC(OriDimTimer,OriDim3);
+
+#ifdef DEBUG_WINDOWORIDIMREALSPACE
+	tt().reshape(ZSIZE(Fin), YSIZE(Fin), XSIZE(Fin));
+	FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(Fin)
+	{
+		DIRECT_MULTIDIM_ELEM(tt(), n) = abs(DIRECT_MULTIDIM_ELEM(Fin, n));
+	}
+	tt.write("windoworidim_Fresized.spi");
+#endif
+
+	// Do the inverse FFT
+	RCTIC(OriDimTimer,OriDim4);
+    //transformer.setReal(Mout);
+	transformer.setSize(XSIZE(Mout),YSIZE(Mout),ZSIZE(Mout));
+	transformer.distribute(DISTRIBUTE_FOURIER);
+	RCTOC(OriDimTimer,OriDim4);
+	RCTIC(OriDimTimer,OriDim5);
+#ifdef TIMING
+	if(printTimes)
+		std::cout << std::endl << "FFTrealDims = (" << transformer.fReal->xdim << " , " << transformer.fReal->ydim << " , " << transformer.fReal->zdim << " ) " << std::endl;
+#endif
+	
+	transformer.inverseFourierTransform();
+	
+	//std::cout << std::endl << transformer.rank << " Inverse finished" << std::endl;
+
+	RCTOC(OriDimTimer,OriDim5);
+	RCTIC(OriDimTimer,OriDim5_1);
+	//std::cout << std::endl << transformer.rank << " Begin Merging..." << std::endl;
+	transformer.mergeTo(Mout);
+	RCTOC(OriDimTimer,OriDim5_1);
+	if(transformer.rank==0) {
+		RCTIC(OriDimTimer,OriDim5_2);
+    	Fin.clear();
+		delete transformer.fReal;
+    	transformer.fReal = NULL; // Make sure to re-calculate fftw plan
+		Mout.setXmippOrigin();
+		RCTOC(OriDimTimer,OriDim5_2);
+		// Shift the map back to its origin
+		RCTIC(OriDimTimer,OriDim6);
+		int nr_threads = omp_get_max_threads();
+		omp_set_num_threads(nr_threads*transformer.size);
+		CenterFFT_omp(Mout,true);
+		omp_set_num_threads(nr_threads);
+		RCTOC(OriDimTimer,OriDim6);
+#ifdef DEBUG_WINDOWORIDIMREALSPACE
+		tt()=Mout;
+		tt.write("windoworidim_Munwindowed.spi");
+#endif
+
+		// Window in real-space
+		RCTIC(OriDimTimer,OriDim7);
+		if (ref_dim==2)
+		{
+			Mout.window(FIRST_XMIPP_INDEX(ori_size), FIRST_XMIPP_INDEX(ori_size),
+					       LAST_XMIPP_INDEX(ori_size), LAST_XMIPP_INDEX(ori_size));
+		}
+		else
+		{
+			Mout.window(FIRST_XMIPP_INDEX(ori_size), FIRST_XMIPP_INDEX(ori_size), FIRST_XMIPP_INDEX(ori_size),
+				       	LAST_XMIPP_INDEX(ori_size), LAST_XMIPP_INDEX(ori_size), LAST_XMIPP_INDEX(ori_size));
+		}
+		Mout.setXmippOrigin();
+		RCTOC(OriDimTimer,OriDim7);
+		// Normalisation factor of FFTW
+		// The Fourier Transforms are all "normalised" for 2D transforms of size = ori_size x ori_size
+		RCTIC(OriDimTimer,OriDim8);
+		Mout /= normfft;
+		RCTOC(OriDimTimer,OriDim8);
+#ifdef DEBUG_WINDOWORIDIMREALSPACE
+		tt()=Mout;
+		tt.write("windoworidim_Mwindowed.spi");
+#endif
+
+		// Mask out corners to prevent aliasing artefacts
+		RCTIC(OriDimTimer,OriDim9);
+		softMaskOutsideMap(Mout);
+		RCTOC(OriDimTimer,OriDim9);
+
+#ifdef DEBUG_WINDOWORIDIMREALSPACE
+		tt()=Mout;
+		tt.write("windoworidim_Mwindowed_masked.spi");
+		FourierTransformer ttf;
+		ttf.FourierTransform(Mout, Fin);
+		tt().resize(ZSIZE(Fin), YSIZE(Fin), XSIZE(Fin));
+		FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(Fin)
+		{
+			DIRECT_MULTIDIM_ELEM(tt(), n) = abs(DIRECT_MULTIDIM_ELEM(Fin, n));
+		}
+		tt.write("windoworidim_Fnew.spi");
+#endif
+
+#ifdef TIMING
+    	if(printTimes)
+    		OriDimTimer.printTimes(true);
+#endif
+	}
+	else {
+		delete transformer.fReal;
+		transformer.fReal = NULL; // Make sure to re-calculate fftw plan
+	}
+	MPI_Barrier(transformer.comm);
+}
+
+#endif

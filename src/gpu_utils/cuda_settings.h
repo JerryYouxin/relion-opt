@@ -87,6 +87,7 @@
 #define NR_CLASS_MUTEXES 5
 
 //The approximate minimum amount of memory each process occupies on a device (in MBs)
+#define USE_ORI_GPUMEM_ASSUMPTION
 #ifndef USE_ORI_GPUMEM_ASSUMPTION
 #define GPU_THREAD_MEMORY_OVERHEAD_MB 500
 #else

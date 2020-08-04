@@ -115,7 +115,8 @@ void DistributedFourierTransformer::cleanup()
 
 }
 
-void DistributedFourierTransformer::setSize(int nx, int ny, int nz) {
+void DistributedFourierTransformer::setSize(int nx, int ny, int nz, bool _transposed_fourier) {
+    transposed_fourier = _transposed_fourier;
     fFourier.reshape(nz,ny,nx/2+1);
     bool recomputePlan=false;
     if (fReal==NULL) {
@@ -174,7 +175,12 @@ void DistributedFourierTransformer::setSize(int nx, int ny, int nz) {
 #ifdef DEBUG_DISTRIBUTED_FFT
     std::cout << "C2"<< std::endl;
 #endif
-        alloc_local = fftw_mpi_local_size(ndim, fN, comm, &local_n0, &local_0_start);
+        if(!transposed_fourier)
+        	alloc_local = fftw_mpi_local_size(ndim, fN, comm, &local_n0, &local_0_start);
+	else if(ndim==3)
+		alloc_local = fftw_mpi_local_size_3d_transposed(fN[0],fN[1],fN[2], comm, &local_n0, &local_0_start,&local_n1,&local_1_start);
+	else
+		REPORT_ERROR("TRANSPOSED FOURIER should ONLY be used in ndim==3");
 #ifdef DEBUG_DISTRIBUTED_FFT
     std::cout << "C3"<< std::endl;
 #endif
@@ -198,6 +204,14 @@ void DistributedFourierTransformer::setSize(int nx, int ny, int nz) {
 
         // Anything to do with plans has to be protected for threads!
         pthread_mutex_lock(&fftw_plan_mutex);
+	int r2c_flags,c2r_flags;
+	if(transposed_fourier) {
+		r2c_flags = FFTW_ESTIMATE|FFTW_DESTROY_INPUT| FFTW_MPI_TRANSPOSED_OUT;
+		c2r_flags = FFTW_ESTIMATE|FFTW_DESTROY_INPUT| FFTW_MPI_TRANSPOSED_IN;
+	} else {
+		r2c_flags = FFTW_ESTIMATE|FFTW_DESTROY_INPUT;
+		c2r_flags = FFTW_ESTIMATE|FFTW_DESTROY_INPUT;
+	}
 #ifdef RELION_SINGLE_PRECISION
 #ifdef DEBUG_DISTRIBUTED_FFT
         std::cout << "## Rank " << rank << " single Planning forward..." << std::endl;
@@ -205,7 +219,7 @@ void DistributedFourierTransformer::setSize(int nx, int ny, int nz) {
 #endif
         fPlanForward = fftwf_mpi_plan_dft_r2c(ndim, N, fReal_local,
                                          (fftwf_complex*) fFourier_local, 
-                                         comm, FFTW_ESTIMATE|FFTW_DESTROY_INPUT);
+                                         comm, r2c_flags);
 #ifdef DEBUG_DISTRIBUTED_FFT
         std::cout << "## Rank " << rank << " single Planning backward..." << std::endl;
         MPI_Barrier(comm);
@@ -213,7 +227,7 @@ void DistributedFourierTransformer::setSize(int nx, int ny, int nz) {
         fPlanBackward = fftwf_mpi_plan_dft_c2r(ndim, N,
                                           (fftwf_complex*) fFourier_local, 
                                           fReal_local,
-                                          comm, FFTW_ESTIMATE|FFTW_DESTROY_INPUT);
+                                          comm, c2r_flags);
 #else
 #ifdef DEBUG_DISTRIBUTED_FFT
         std::cout << "## Rank " << rank << " Planning forward..." << std::endl;
@@ -222,7 +236,7 @@ void DistributedFourierTransformer::setSize(int nx, int ny, int nz) {
 #endif
         fPlanForward = fftw_mpi_plan_dft_r2c(ndim, N, fReal_local,
                                          (fftw_complex*) fFourier_local, 
-                                         comm, FFTW_ESTIMATE|FFTW_DESTROY_INPUT);
+                                         comm, r2c_flags);
 #ifdef DEBUG_DISTRIBUTED_FFT
         std::cout << "## Rank " << rank << " Planning backward..." << std::endl;
         MPI_Barrier(comm);
@@ -231,7 +245,7 @@ void DistributedFourierTransformer::setSize(int nx, int ny, int nz) {
         fPlanBackward = fftw_mpi_plan_dft_c2r(ndim, N,
                                           (fftw_complex*) fFourier_local, 
                                           fReal_local,
-                                          comm, FFTW_ESTIMATE|FFTW_DESTROY_INPUT);
+                                          comm, c2r_flags);
 #endif
 #ifdef DEBUG_DISTRIBUTED_FFT
         std::cout << "## Rank " << rank << " Planning finished" << std::endl;
@@ -359,6 +373,7 @@ void DistributedFourierTransformer::distribute(bool real)
         std::cout << "## Rank " << rank << " REPORT ==> Waiting for distribute mpi sending..." << std::endl;
 #endif
         MPI_Wait(&request[0], &status);
+        MPI_Recv(dLocInfo,2*size,MPI_INT, 0, 102, comm, &status);
 #ifdef DEBUG_DISTRIBUTED_FFT
         std::cout << "## Rank " << rank << " REPORT ==> finish" << std::endl;
 #endif
@@ -372,6 +387,11 @@ void DistributedFourierTransformer::distribute(bool real)
             std::cout << "## Rank " << rank << " REPORT ==> from " << i << " finish, " << dLocInfo[2*i] << ", "<< dLocInfo[2*i+1] << std::endl;
 #endif
         }
+        dLocInfo[0] = local_0_start;
+	    dLocInfo[1] = local_n0;
+        for(int i=1;i<size;++i) {
+            MPI_Send(dLocInfo,2*size,MPI_INT,i,102,comm);
+        }
     }
     MPI_Barrier(comm);
 }
@@ -380,7 +400,10 @@ void DistributedFourierTransformer::distribute_location()
 {   
     MPI_Request* request = new MPI_Request[size];
     MPI_Status status;
-    int data[2] = { local_0_start, local_n0 };
+    int data[2];
+    if(transposed_fourier) { data[0] = local_1_start; data[1] = local_n1; }
+    else                   { data[0] = local_0_start; data[1] = local_n0; }
+    //int data[2] = { local_0_start, local_n0 };
     if(rank!=0) {
         MPI_Isend(data, 2, MPI_INT, 0, 101, comm, &request[0]);
     } else {
@@ -393,6 +416,7 @@ void DistributedFourierTransformer::distribute_location()
         std::cout << "## Rank " << rank << " REPORT ==> Waiting for distribute mpi sending..." << std::endl;
 #endif
         MPI_Wait(&request[0], &status);
+        MPI_Recv(dLocInfo,2*size,MPI_INT, 0, 102, comm, &status);
 #ifdef DEBUG_DISTRIBUTED_FFT
         std::cout << "## Rank " << rank << " REPORT ==> finish" << std::endl;
 #endif
@@ -406,57 +430,26 @@ void DistributedFourierTransformer::distribute_location()
             std::cout << "## Rank " << rank << " REPORT ==> from " << i << " finish, " << dLocInfo[2*i] << ", "<< dLocInfo[2*i+1] << std::endl;
 #endif
         }
+        dLocInfo[0] = local_0_start;
+	    dLocInfo[1] = local_n0;
+        for(int i=1;i<size;++i) {
+            MPI_Send(dLocInfo,2*size,MPI_INT,i,102,comm);
+        }
     }
     MPI_Barrier(comm);
 }
 
 void DistributedFourierTransformer::mergeTo(MultidimArray<RFLOAT>& out)
 {
-    //printf("%d : In merge to RFLOAT\n",rank);
-    // int sz = xdim*ydim;
-    // int LA = 2*(xdim/2+1)*ydim;
-    // if(rank==0) {
-    //     MPI_Status status;
-    //     for(int i=1;i<size;++i) {
-    //         if(dLocInfo[i*2+1] > local_n0) {
-    //             printf("ERROR! %d > %d\n", dLocInfo[i*2+1], local_n0);
-    //             exit(-1);
-    //         }
-    //         for(int k=0;k<dLocInfo[i*2+1];++k) {
-    //             node->relion_MPI_Recv(&(out.data[(dLocInfo[i*2]+k)*sz]), sz, MY_MPI_DOUBLE, i, 100, comm, status);
-    //         }
-    //         printf("Recved %d\n", i);
-    //     }
-
-    //     int fxdim = xdim/2+1;
-    //     int xdim_local = 2*fxdim;
-    //     int xydim = xdim_local*ydim;
-    //     for(int k=0;k<local_n0;++k) {
-    //         for(int i=0;i<ydim;++i) {
-    //             for(int j=0;j<xdim;++j) {
-    //                 DIRECT_A3D_ELEM(out,k+local_0_start,i,j) = fReal_local[k*xydim+i*xdim_local+j];
-    //             }
-    //         }
-    //     }
-    //     printf("Rank %d wait Finished\n",rank);
-    // } else {
-    //     for(int k=0;k<local_n0;++k) {
-    //         node->relion_MPI_Send(&fReal_local[k*LA], sz, MY_MPI_DOUBLE, 0, 100, comm);
-    //     }
-    //     printf("Rank %d wait Finished\n",rank);
-    // }
     merge(true);
     if(rank==0) {
-        //out.printShape();
-        //fReal->printShape();
+        #pragma omp parallel for
         FOR_ALL_DIRECT_ELEMENTS_IN_ARRAY3D(out)
         {
             DIRECT_A3D_ELEM(out,k,i,j) = DIRECT_A3D_ELEM(*fReal,k,i,j);
         }
     }
-    //printf("Rank %d finish merging\n",node->rank);
     MPI_Barrier(comm);
-    //printf("Rank %d finish merging after barrier\n",node->rank);
 }
 
 void DistributedFourierTransformer::merge(bool real)
@@ -466,58 +459,24 @@ void DistributedFourierTransformer::merge(bool real)
     RFLOAT* dst  = NULL;
     int sz = 2*(xdim/2+1)*ydim;
     if(real) {
-        fReal->initZeros();
+        // fReal->initZeros();
         dst  = (RFLOAT*)fReal->data;
         data = (RFLOAT*)fReal_local; 
     } else {
-        fFourier.initZeros();
+        // fFourier.initZeros();
         dst  = (RFLOAT*)fFourier.data;
         data = (RFLOAT*)fFourier_local;
     }
     if(rank==0) {
-        //MPI_Request* request = new MPI_Request[size*local_n0];
         MPI_Status status;
-        //bool splitted = false;
-
         for(int i=1;i<size;++i) {
-            if(((double)dLocInfo[i*2+1])*sz*sizeof(RFLOAT) >= 1024.*1024.*1024.*2) {
-                //printf("Too Large data size. split by local_n0\n");
-                //splitted = true;
-                if(dLocInfo[i*2+1] > local_n0) {
-                    //printf("ERROR! %d > %d\n", dLocInfo[i*2+1], local_n0);
-                    exit(-1);
-                }
-                for(int k=0;k<dLocInfo[i*2+1];++k) {
-#ifdef RELION_SINGLE_PRECISION
-                    MPI_Recv(&dst[(dLocInfo[i*2]+k)*sz], sz, MPI_FLOAT, i, 100, comm, &status);//, &request[i*local_n0+k]);
-#else
-                    MPI_Recv(&dst[(dLocInfo[i*2]+k)*sz], sz, MPI_DOUBLE, i, 100, comm, &status);//, &request[i*local_n0+k]);
-#endif
-                }
-            } else {
-                // printf("Checking...%d %d %d %d\n",i,dLocInfo[i*2],dLocInfo[i*2+1],sz);
-                // printf("%x... %x %x %x %x\n",dst,fReal->data,fReal_local,fFourier.data,fFourier_local);
-                // fReal->printShape();
-                // fFourier.printShape();
-                // for(int p=dLocInfo[i*2]*sz;p<dLocInfo[i*2]*sz+dLocInfo[i*2+1]*sz-1;++p) {
-                //     //printf("%d from %d to %d\n",p,dLocInfo[i*2]*sz,dLocInfo[i*2]*sz+dLocInfo[i*2+1]*sz-1);
-                //     dst[p]=0.;
-                // }
-                //printf("Recving...\n");
-#ifdef RELION_SINGLE_PRECISION
-                MPI_Recv(&dst[dLocInfo[i*2]*sz], dLocInfo[i*2+1]*sz, MPI_FLOAT, i, 100, comm, &status);//, &request[i]);
-#else
-                MPI_Recv(&dst[dLocInfo[i*2]*sz], dLocInfo[i*2+1]*sz, MPI_DOUBLE, i, 100, comm, &status);//, &request[i]);
-#endif
-                //printf("Recved %d\n", i);
-            }
+            node->relion_MPI_IRecv(&dst[dLocInfo[i*2]*sz], dLocInfo[i*2+1]*sz, MY_MPI_DOUBLE, i, 100, comm);
         }
-
-        int xydim = xdim*ydim;
         if(real) {
             int fxdim = xdim/2+1;
             int xdim_local = 2*fxdim;
             int xydim = xdim_local*ydim;
+            #pragma omp parallel for
             for(int k=0;k<local_n0;++k) {
                 for(int i=0;i<ydim;++i) {
                     for(int j=0;j<xdim;++j) {
@@ -528,6 +487,7 @@ void DistributedFourierTransformer::merge(bool real)
         } else {
             int fxdim = xdim/2+1;
             int xydim = fxdim*ydim;
+            #pragma omp parallel for
             for(int k=0;k<local_n0;++k) {
                 for(int i=0;i<ydim;++i) {
                     for(int j=0;j<fxdim;++j) {
@@ -536,55 +496,11 @@ void DistributedFourierTransformer::merge(bool real)
                 }
             }
         }
-        // if(splitted) {
-        //     for(int n=1;n<size;++n) for(int i=0;i<dLocInfo[n*2+1];++i) {
-        //         printf("Rank %d, waiting for Rank %d : package %d : request %x, status %x\n",rank, n, i, &request[n*local_n0+i], &status);
-        //         MPI_Wait(&request[n], &status);
-        //     }
-        // } else {
-        //     for(int n=1;n<size;++n) {
-        //         printf("Rank %d, waiting for Rank %d request %x, status %x\n",rank, n, &request[n], &status);
-        //         MPI_Wait(&request[n], &status);
-        //     }
-        // }
-        //printf("Rank %d wait Finished\n",rank);
-        //delete[] request;
+        node->relion_MPI_WaitAll(status);
     } else {
-        if(((double)local_n0)*sz*sizeof(RFLOAT) >= 1024.*1024.*1024.*2.) {
-            //printf("Rank %d Too Large data size. split by local_n0 %d\n",rank, local_n0);
-            //MPI_Request* request = new MPI_Request[local_n0];
-            //MPI_Status status;
-            for(int k=0;k<local_n0;++k) {
-                //printf("Sending %x %lf\n",&data[k*sz],data[k*sz+sz-1]);
-#ifdef RELION_SINGLE_PRECISION
-                MPI_Send(&data[k*sz], sz, MPI_FLOAT, 0, 100, comm);//, &request[k]);
-#else
-                MPI_Send(&data[k*sz], sz, MPI_DOUBLE, 0, 100, comm);//, &request[k]);
-#endif
-            }
-            // for(int k=0;k<local_n0;++k) {
-            //     printf("Rank %d, waiting for package %d, request %x, status %x, sending %lf MB data.\n",rank, k, &request[k], &status, sz*sizeof(RFLOAT)/1024.0/1024.0);
-            //     MPI_Wait(&request[k], &status);
-            // }
-            //printf("Rank %d wait Finished\n",rank);
-            // delete[] request;
-        } else {
-            //printf("Sending %x %lf\n",data,data[local_n0*sz-1]);
-            for(int i=0;i<local_n0*sz;++i) {
-                RFLOAT debug = data[i];
-            }
-            //printf("Sending...\n");
-            //MPI_Request request;
-            //MPI_Status status;
-#ifdef RELION_SINGLE_PRECISION
-            MPI_Send(data, local_n0*sz, MPI_FLOAT, 0, 100, comm);//, &request);
-#else
-            MPI_Send(data, local_n0*sz, MPI_DOUBLE, 0, 100, comm);//, &request);
-#endif
-            //printf("Rank %d, waiting for request %x, status %x, sending %lf MB data.\n",rank, &request, &status, local_n0*sz*sizeof(RFLOAT)/1024.0/1024.0);
-            //MPI_Wait(&request, &status);
-            //printf("Rank %d wait Finished\n",rank);
-        }
+        MPI_Status status;
+        node->relion_MPI_ISend(data, local_n0*sz, MY_MPI_DOUBLE, 0, 100, comm);
+        node->relion_MPI_WaitAll(status);
     }
     MPI_Barrier(comm);
 }

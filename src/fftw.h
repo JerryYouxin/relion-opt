@@ -53,6 +53,8 @@
 #include "src/complex.h"
 #include "src/CPlot2D.h"
 
+#include <omp.h>
+
 /** @defgroup FourierW FFTW Fourier transforms
   * @ingroup DataLibrary
   */
@@ -563,9 +565,211 @@ void CenterFFT(MultidimArray< T >& v, bool forward)
     	REPORT_ERROR("CenterFFT ERROR: Dimension should be 1, 2 or 3");
     }
 }
+#ifndef FORCE_USE_ORI_RECONS
+template <typename T>
+void CenterFFT_omp(MultidimArray< T >& v, bool forward)
+{
+    int tnum = omp_get_max_threads();
+    if ( v.getDim() == 1 )
+    {
+        // 1D
+        MultidimArray< T > aux;
+        int l, shift;
 
+        l = XSIZE(v);
+        aux.reshape(l);
+        shift = (int)(l / 2);
 
+        if (!forward)
+            shift = -shift;
 
+	#pragma omp parallel for
+        // Shift the input in an auxiliar vector
+        for (int i = 0; i < l; i++)
+        {
+            int ip = i + shift;
+
+            if (ip < 0)
+                ip += l;
+            else if (ip >= l)
+                ip -= l;
+
+            aux(ip) = DIRECT_A1D_ELEM(v, i);
+        }
+
+	#pragma omp parallel for
+        // Copy the vector
+        for (int i = 0; i < l; i++)
+            DIRECT_A1D_ELEM(v, i) = DIRECT_A1D_ELEM(aux, i);
+    }
+    else if ( v.getDim() == 2 )
+    {
+        // 2D
+        MultidimArray< T > aux;
+        int l, shift;
+
+        // Shift in the X direction
+        l = XSIZE(v);
+        aux.reshape(l);
+        shift = (int)(l / 2);
+
+        if (!forward)
+            shift = -shift;
+
+        for (int i = 0; i < YSIZE(v); i++)
+        {
+            // Shift the input in an auxiliar vector
+            for (int j = 0; j < l; j++)
+            {
+                int jp = j + shift;
+
+                if (jp < 0)
+                    jp += l;
+                else if (jp >= l)
+                    jp -= l;
+
+                aux(jp) = DIRECT_A2D_ELEM(v, i, j);
+            }
+
+            // Copy the vector
+            for (int j = 0; j < l; j++)
+                DIRECT_A2D_ELEM(v, i, j) = DIRECT_A1D_ELEM(aux, j);
+        }
+
+        // Shift in the Y direction
+        l = YSIZE(v);
+        aux.reshape(l);
+        shift = (int)(l / 2);
+
+        if (!forward)
+            shift = -shift;
+
+        for (int j = 0; j < XSIZE(v); j++)
+        {
+            // Shift the input in an auxiliar vector
+            for (int i = 0; i < l; i++)
+            {
+                int ip = i + shift;
+
+                if (ip < 0)
+                    ip += l;
+                else if (ip >= l)
+                    ip -= l;
+
+                aux(ip) = DIRECT_A2D_ELEM(v, i, j);
+            }
+
+            // Copy the vector
+            for (int i = 0; i < l; i++)
+                DIRECT_A2D_ELEM(v, i, j) = DIRECT_A1D_ELEM(aux, i);
+        }
+    }
+    else if ( v.getDim() == 3 )
+    {
+        // 3D
+        MultidimArray< T > aux;
+        int l, shift;
+
+        // Shift in the X direction
+        l = XSIZE(v);
+        aux.reshape(tnum,l);
+        shift = (int)(l / 2);
+
+        if (!forward)
+            shift = -shift;
+
+	#pragma omp parallel for
+        for (int k = 0; k < ZSIZE(v); k++) {
+	    int tid = omp_get_thread_num();
+            for (int i = 0; i < YSIZE(v); i++)
+            {
+                // Shift the input in an auxiliar vector
+                for (int j = 0; j < l; j++)
+                {
+                    int jp = j + shift;
+
+                    if (jp < 0)
+                        jp += l;
+                    else if (jp >= l)
+                        jp -= l;
+
+                    aux(tid,jp) = DIRECT_A3D_ELEM(v, k, i, j);
+                }
+
+                // Copy the vector
+                for (int j = 0; j < l; j++)
+                    DIRECT_A3D_ELEM(v, k, i, j) = DIRECT_A2D_ELEM(aux, tid, j);
+            }
+	}
+
+        // Shift in the Y direction
+        l = YSIZE(v);
+        aux.reshape(tnum,l);
+        shift = (int)(l / 2);
+
+        if (!forward)
+            shift = -shift;
+
+	#pragma omp parallel for
+        for (int k = 0; k < ZSIZE(v); k++) {
+	    int tid = omp_get_thread_num();
+            for (int j = 0; j < XSIZE(v); j++)
+            {
+                // Shift the input in an auxiliar vector
+                for (int i = 0; i < l; i++)
+                {
+                    int ip = i + shift;
+
+                    if (ip < 0)
+                        ip += l;
+                    else if (ip >= l)
+                        ip -= l;
+
+                    aux(tid,ip) = DIRECT_A3D_ELEM(v, k, i, j);
+                }
+
+                // Copy the vector
+                for (int i = 0; i < l; i++)
+                    DIRECT_A3D_ELEM(v, k, i, j) = DIRECT_A2D_ELEM(aux, tid, i);
+            }
+	}
+        // Shift in the Z direction
+        l = ZSIZE(v);
+        aux.reshape(tnum,l);
+        shift = (int)(l / 2);
+
+        if (!forward)
+            shift = -shift;
+	#pragma omp parallel for
+        for (int i = 0; i < YSIZE(v); i++) {
+	    int tid = omp_get_thread_num();
+            for (int j = 0; j < XSIZE(v); j++)
+            {
+                // Shift the input in an auxiliar vector
+                for (int k = 0; k < l; k++)
+                {
+                    int kp = k + shift;
+                    if (kp < 0)
+                        kp += l;
+                    else if (kp >= l)
+                        kp -= l;
+
+                    aux(tid, kp) = DIRECT_A3D_ELEM(v, k, i, j);
+                }
+
+                // Copy the vector
+                for (int k = 0; k < l; k++)
+                    DIRECT_A3D_ELEM(v, k, i, j) = DIRECT_A2D_ELEM(aux, tid, k);
+            }
+	}
+    }
+    else
+    {
+    	v.printShape();
+    	REPORT_ERROR("CenterFFT ERROR: Dimension should be 1, 2 or 3");
+    }
+}
+#endif
 // Window an FFTW-centered Fourier-transform to a given size
 template<class T>
 void windowFourierTransform(MultidimArray<T > &in,

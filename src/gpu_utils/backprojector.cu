@@ -17,7 +17,22 @@
 #define DTOC(timer,stamp)
 #endif
 
-extern __constant__ RFLOAT __R_array [100 * 4 * 4];
+// extern __constant__ RFLOAT __R_array [100 * 4 * 4];
+bool BackProjector::GPU_inited = false;
+void BackProjector::symmetrise_gpu_init(int rank)
+{
+	int devCount;
+    cudaGetDeviceCount(&devCount);
+    int dev_id=rank%devCount;
+	DEBUG_HANDLE_ERROR(cudaSetDevice(dev_id));
+}
+void BackProjector::symmetrise_gpu_finalize()
+{
+#ifndef DONT_RESET_GPU
+	GPU_inited = false;
+	HANDLE_ERROR(cudaDeviceReset());
+#endif
+}
 
 void BackProjector::symmetrise_gpu(int rank, int nr_helical_asu, RFLOAT helical_twist, RFLOAT helical_rise)
 {
@@ -44,10 +59,10 @@ void BackProjector::symmetrise_gpu(int rank, int nr_helical_asu, RFLOAT helical_
 	sym_timer.toc(TIMING_HELICAL);
 	sym_timer.tic(TIMING_GPUSET);
 #endif
-    int devCount;
-    cudaGetDeviceCount(&devCount);
-    int dev_id=rank%devCount;
-	DEBUG_HANDLE_ERROR(cudaSetDevice(dev_id));
+    // int devCount;
+    // cudaGetDeviceCount(&devCount);
+    // int dev_id=rank%devCount;
+	// DEBUG_HANDLE_ERROR(cudaSetDevice(dev_id));
 #ifdef TIMING
 	sym_timer.toc(TIMING_GPUSET);
 	sym_timer.tic(TIMING_POINTGROUP);
@@ -57,7 +72,7 @@ void BackProjector::symmetrise_gpu(int rank, int nr_helical_asu, RFLOAT helical_
 	sym_timer.toc(TIMING_POINTGROUP);
 	sym_timer.tic(TIMING_GPURESET);
 #endif
-	HANDLE_ERROR(cudaDeviceReset());
+	// HANDLE_ERROR(cudaDeviceReset());
 #ifdef TIMING
 	sym_timer.toc(TIMING_GPURESET);
 	sym_timer.printTimes(true);
@@ -83,11 +98,16 @@ void BackProjector::applyPointGroupSymmetry_gpu(int rank)
 	int rmax2 = ROUND(r_max * padding_factor) * ROUND(r_max * padding_factor);
 	if (SL.SymsNo() > 0 && ref_dim == 3)
 	{
-		printf("gpu...,rmax2=%d\n",rmax2);
+		printf("gpu...,rmax2=%d, symsNo=%d\n",rmax2, SL.SymsNo());
 		DTIC(sym_timer,TIMING_START_1);
-		//cudaStream_t stream;
-		//cudaStreamCreate(&stream);
-		//HANDLE_ERROR(cudaGetLastError());
+		cudaStream_t stream;
+#ifdef USE_SYMM_ASYNC
+		cudaStreamCreate(&stream);
+		HANDLE_ERROR(cudaGetLastError());
+		streamList.push_back((int)stream);
+#else
+		stream = 0;
+#endif
 		DTOC(sym_timer,TIMING_START_1);
 		DTIC(sym_timer,TIMING_START_2);
 		int zdim = ZSIZE(weight);
@@ -106,7 +126,11 @@ void BackProjector::applyPointGroupSymmetry_gpu(int rank)
 		DTOC(sym_timer,TIMING_START_2);
 		DTIC(sym_timer,TIMING_CPYTOSYM);
 		HANDLE_ERROR(cudaGetLastError());
-		set_R(SL.__R.mdata, SL.SymsNo(), 0);
+		if(!GPU_inited) {
+			// As SL data will always the same across different BP instances in execution, so just transfer constant only once.
+			set_R(SL.__R.mdata, SL.SymsNo(), 0);
+			GPU_inited = true;
+		}
 		//size_t avail, total_mem;
 		//HANDLE_ERROR(cudaStreamSynchronize(0));
 		DTOC(sym_timer,TIMING_CPYTOSYM);
@@ -143,21 +167,25 @@ void BackProjector::applyPointGroupSymmetry_gpu(int rank)
 		#undef NTRY
 		DTOC(sym_timer,TIMING_MEMALLOC);
 		DTIC(sym_timer,TIMING_CPYTODEV);
-		cudaMemcpyAsync(my_data_D, data.data, model_size * sizeof(__COMPLEX_T ), cudaMemcpyHostToDevice,0);
-		cudaMemcpyAsync(my_weight_D, weight.data, model_size * sizeof(RFLOAT), cudaMemcpyHostToDevice,0);
-		//HANDLE_ERROR(cudaStreamSynchronize(0));
+		cudaMemcpyAsync(my_data_D, data.data, model_size * sizeof(__COMPLEX_T ), cudaMemcpyHostToDevice,stream);
+		cudaMemcpyAsync(my_weight_D, weight.data, model_size * sizeof(RFLOAT), cudaMemcpyHostToDevice,stream);
+#ifndef USE_SYMM_ASYNC
+		HANDLE_ERROR(cudaStreamSynchronize(stream));
+#endif
 		DTOC(sym_timer,TIMING_CPYTODEV);
 		DTIC(sym_timer,TIMING_DEVTODEV);
-		cudaMemcpyAsync(my_data_temp_D, my_data_D, model_size * sizeof(__COMPLEX_T ), cudaMemcpyDeviceToDevice,0);
-		cudaMemcpyAsync(my_weight_temp_D, my_weight_D, model_size * sizeof(RFLOAT), cudaMemcpyDeviceToDevice,0);
+		cudaMemcpyAsync(my_data_temp_D, my_data_D, model_size * sizeof(__COMPLEX_T ), cudaMemcpyDeviceToDevice,stream);
+		cudaMemcpyAsync(my_weight_temp_D, my_weight_D, model_size * sizeof(RFLOAT), cudaMemcpyDeviceToDevice,stream);
 		//HANDLE_ERROR(cudaGetLastError());
-		HANDLE_ERROR(cudaStreamSynchronize(0));
+#ifndef USE_SYMM_ASYNC
+		HANDLE_ERROR(cudaStreamSynchronize(stream));
+#endif
 		DTOC(sym_timer,TIMING_DEVTODEV);
 		DTIC(sym_timer,TIMING_KERNEL);
 #ifdef PRINT_ROOFLINE_DATA
 		double s = omp_get_wtime();
 #endif
-		symmetrise_kernel <<< gridDim, blockDim >>>(my_data_temp_D,
+		symmetrise_kernel <<< gridDim, blockDim, 0, stream >>>(my_data_temp_D,
 													my_weight_temp_D,
 													my_data_D,
 													my_weight_D,
@@ -171,7 +199,9 @@ void BackProjector::applyPointGroupSymmetry_gpu(int rank)
 													rmax2,
 													SL.SymsNo());
 		HANDLE_ERROR(cudaGetLastError());
-		HANDLE_ERROR(cudaStreamSynchronize(0));
+#ifndef USE_SYMM_ASYNC
+		HANDLE_ERROR(cudaStreamSynchronize(stream));
+#endif
 #ifdef PRINT_ROOFLINE_DATA
 		double e = omp_get_wtime();
 		double time = e - s;
@@ -193,10 +223,12 @@ void BackProjector::applyPointGroupSymmetry_gpu(int rank)
 #endif
 		DTOC(sym_timer,TIMING_KERNEL);
 		DTIC(sym_timer,TIMING_DEVTOHST);
-		cudaMemcpyAsync(data.data, my_data_D, model_size * sizeof(__COMPLEX_T ), cudaMemcpyDeviceToHost,0);
-		cudaMemcpyAsync(weight.data, my_weight_D, model_size * sizeof(RFLOAT), cudaMemcpyDeviceToHost,0);
+		cudaMemcpyAsync(data.data, my_data_D, model_size * sizeof(__COMPLEX_T ), cudaMemcpyDeviceToHost,stream);
+		cudaMemcpyAsync(weight.data, my_weight_D, model_size * sizeof(RFLOAT), cudaMemcpyDeviceToHost,stream);
 		HANDLE_ERROR(cudaGetLastError());
+#ifndef USE_SYMM_ASYNC
 		HANDLE_ERROR(cudaStreamSynchronize(0));
+#endif
 		DTOC(sym_timer,TIMING_DEVTOHST);
 		DTIC(sym_timer,TIMING_MEMFREE);
 		cudaFree(my_data_temp_D);
@@ -255,6 +287,7 @@ void BackProjector::reconstruct_gpu(int rank,
 	Timer ReconTimer;
 	int ReconS_0 = ReconTimer.setNew(" RcS0_SetDevice ");
 	int ReconS_1 = ReconTimer.setNew(" RcS1_Init ");
+	int ReconS_1_0=ReconTimer.setNew(" RcS1_0_cutransformer.setPlan ");
 	int ReconS_2 = ReconTimer.setNew(" RcS2_Shape&Noise ");
 	int ReconS_3 = ReconTimer.setNew(" RcS3_skipGridding ");
 	int ReconS_4 = ReconTimer.setNew(" RcS4_doGridding_norm ");
@@ -314,7 +347,7 @@ void BackProjector::reconstruct_gpu(int rank,
 	bool weight_splitted = false;
 	size_t weight_buffSize = 0;
 
-	printf("pad_size=%d, ref_dim=%d, r_max=%d, normalise=%lf\n",pad_size,ref_dim,r_max,normalise);
+	printf("pad_size=%d, ref_dim=%d, r_max=%d, normalise=%lf, GPU=%d\n",pad_size,ref_dim,r_max,normalise,dev_id);
 
     // Set Fweight, Fnewweight and Fconv to the right size
     if (ref_dim == 2) {
@@ -330,7 +363,9 @@ void BackProjector::reconstruct_gpu(int rank,
 			cutransformer.clear();
 			HANDLE_ERROR(cudaDeviceSynchronize());
 			cudaStreamDestroy(stream);
+#ifndef DONT_RESET_GPU
 			HANDLE_ERROR(cudaDeviceReset());
+#endif
 			reconstruct(
 				vol_out,
 				max_iter_preweight,
@@ -387,7 +422,9 @@ void BackProjector::reconstruct_gpu(int rank,
 			cutransformer.clear();
 			HANDLE_ERROR(cudaDeviceSynchronize());
 			cudaStreamDestroy(stream);
+#ifndef DONT_RESET_GPU
 			HANDLE_ERROR(cudaDeviceReset());
+#endif
 			reconstruct(
 				vol_out,
 				max_iter_preweight,
@@ -408,7 +445,6 @@ void BackProjector::reconstruct_gpu(int rank,
 		}
 	}
 
-	cutransformer.setPlan();
 	size_t fxsize = XSIZE(Fconv);
 	size_t fysize = YSIZE(Fconv);
 	size_t fxysize= fxsize*fysize;
@@ -428,7 +464,10 @@ void BackProjector::reconstruct_gpu(int rank,
 	//transformer.setReal(vol_out); // Fake set real. 1. Allocate space for Fconv 2. calculate plans.
     vol_out.clear(); // Reset dimensions to 0
 
-    DTOC(ReconTimer,ReconS_1);
+	DTOC(ReconTimer,ReconS_1);
+	DTIC(ReconTimer,ReconS_1_0);
+	cutransformer.setPlan();
+    DTOC(ReconTimer,ReconS_1_0);
     DTIC(ReconTimer,ReconS_2);
 
     Fweight.reshape(Fconv);
@@ -855,7 +894,7 @@ void BackProjector::reconstruct_gpu(int rank,
     vol_out.setXmippOrigin();
 	cutransformer.reals.streamSync();
 	cutransformer.reals.cp_to_host();
-	cutransformer.reals.streamSync();
+ 	cutransformer.reals.streamSync();
 	// cutransformer.reals.free_if_set();
 	// cutransformer.fouriers.free_if_set();
 #ifndef FORCE_NOT_USE_BUFF_FFT
@@ -869,9 +908,11 @@ void BackProjector::reconstruct_gpu(int rank,
 	HANDLE_ERROR(cudaDeviceSynchronize());
 	cudaStreamDestroy(stream);
 	DTOC(ReconTimer,ReconS_18);
+#ifndef DONT_RESET_GPU
 	DTIC(ReconTimer,ReconS_26);
 	HANDLE_ERROR(cudaDeviceReset());
 	DTOC(ReconTimer,ReconS_26);
+#endif
 #endif
 	// If the tau-values were calculated based on the FSC, then now re-calculate the power spectrum of the actual reconstruction
 	if (update_tau2_with_fsc)
@@ -888,16 +929,16 @@ void BackProjector::reconstruct_gpu(int rank,
 		DTOC(ReconTimer,ReconS_19);
 		DTIC(ReconTimer,ReconS_20);
 	    // recycle the same transformer for all images
-        transformer.setReal(vol_out);
+		transformer.setReal(vol_out);
 		DTOC(ReconTimer,ReconS_20);
 		DTIC(ReconTimer,ReconS_21);
-        transformer.FourierTransform();
+		transformer.FourierTransform();
 		DTOC(ReconTimer,ReconS_21);
 		DTIC(ReconTimer,ReconS_22);
-	    FOR_ALL_ELEMENTS_IN_FFTW_TRANSFORM(Fconv)
+		FOR_ALL_ELEMENTS_IN_FFTW_TRANSFORM(Fconv)
 	    {
 	    	long int idx = ROUND(sqrt(kp*kp + ip*ip + jp*jp));
-	    	spectrum(idx) += norm(dAkij(Fconv, k, i, j));
+			spectrum(idx) += norm(dAkij(Fconv, k, i, j));
 	        count(idx) += 1.;
 	    }
 	    spectrum /= count;
@@ -1125,7 +1166,9 @@ void BackProjector::windowToOridimRealSpace_gpu(int rank, FourierTransformer &tr
 	cutransformer->clear();
 	HANDLE_ERROR(cudaDeviceSynchronize());
 	cudaStreamDestroy(stream);
+#ifndef DONT_RESET_GPU
 	HANDLE_ERROR(cudaDeviceReset());
+#endif
 	DTOC(OriDimTimer,OriDim10);
 #endif
 #ifdef TIMING

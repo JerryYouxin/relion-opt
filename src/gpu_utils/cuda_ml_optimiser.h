@@ -458,8 +458,10 @@ public:
 		coarseProjectionPlans.clear();
 		//Delete this lastly
 		delete allocator;
+#ifndef DONT_RESET_GPU
 		HANDLE_ERROR(cudaSetDevice(device_id));
 		HANDLE_ERROR(cudaDeviceReset());
+#endif
 	}
 
 };

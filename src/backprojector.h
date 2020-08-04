@@ -33,6 +33,8 @@
 #include "src/tabfuncs.h"
 #include "src/symmetries.h"
 
+#include <vector>
+
 class BackProjector: public Projector
 {
 public:
@@ -306,6 +308,9 @@ public:
 	void windowToOridimRealSpace(FourierTransformer &transformer, MultidimArray<RFLOAT> &Mout, int nr_threads = 1, bool printTimes = false);
 
 #ifdef CUDA
+	static bool GPU_inited;
+	static void symmetrise_gpu_init(int rank);
+	static void symmetrise_gpu_finalize();
 	void symmetrise_gpu(int rank, int nr_helical_asu = 1, RFLOAT helical_twist = 0., RFLOAT helical_rise = 0.);
 	void enforceHermitianSymmetry_gpu();
 	void applyHelicalSymmetry_gpu(int nr_helical_asu = 1, RFLOAT helical_twist = 0., RFLOAT helical_rise = 0.);

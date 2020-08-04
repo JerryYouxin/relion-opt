@@ -9,8 +9,10 @@ void set_R(const RFLOAT* R, int symno, cudaStream_t stream)
 	if( symno > 100) {
 		REPORT_ERROR("symsno > 100!!!");
 	}
+	
 	cudaMemcpyToSymbolAsync(__R_array, R, symno * 4 * 4 * sizeof(RFLOAT), 0 , cudaMemcpyHostToDevice,stream);
 }
+
 
 __global__ void symmetrise_kernel(const __COMPLEX_T * __restrict__ my_data_temp_D ,
                                   const  RFLOAT* __restrict__ my_weight_temp_D,
@@ -24,7 +26,7 @@ __global__ void symmetrise_kernel(const __COMPLEX_T * __restrict__ my_data_temp_
                                   int start_y,
                                   int start_z,
                                   int my_rmax2,
-                                  int nr_SymsNo)
+								  int nr_SymsNo)
 
 {
 	int id = threadIdx.x + blockIdx.x * blockDim.x;
@@ -159,6 +161,39 @@ __global__ void symmetrise_kernel(const __COMPLEX_T * __restrict__ my_data_temp_
 	my_weight_D[id] += weight;
 }
 
+__global__ void multFTBlobKernel_noMask_zsplit( 
+        RFLOAT* real, int zstart,
+        int XYZSIZE, int XYSIZE, 
+        int XSIZE, int YSIZE,
+        int padhdim, int pad_size,
+        int padding_factor,
+        int orixpad,
+        RFLOAT  normftblob, RFLOAT sampling,
+        RFLOAT* tabulatedValues , int tabftblob_xsize) {
+    
+    const unsigned int tid = threadIdx.x;
+    const unsigned int bid = blockIdx.x;
+    const unsigned int id = tid+bid*BLOCK_SIZE;
+
+    if(id>=XYZSIZE) return ;
+
+    const unsigned int k = id / XYSIZE + zstart;
+    const unsigned int i =(id / XSIZE)%YSIZE;
+    const unsigned int j = id % XSIZE;
+
+	const int kp = (k < padhdim) ? k : k - pad_size;
+	const int ip = (i < padhdim) ? i : i - pad_size;
+	const int jp = (j < padhdim) ? j : j - pad_size;
+    const RFLOAT rval = sqrt ( (RFLOAT)(kp * kp + ip * ip + jp * jp) ) / orixpad;
+
+    int idx = (int)( ABS(rval) / sampling);
+    if (idx >= tabftblob_xsize)
+        real[id] = 0.;
+    else
+        real[id]*= (tabulatedValues[idx] / normftblob);
+
+}
+
 __global__ void multFTBlobKernel_noMask( 
         RFLOAT* real, 
         int XYZSIZE, int XYSIZE, 
@@ -248,6 +283,29 @@ __global__ void divFconvKernel(__COMPLEX_T * __restrict__ Fconv, double* Fnewwei
     const unsigned int k = id / XYSIZE;
     const unsigned int i =(id / XSIZE)%YSIZE;
     const unsigned int j = id % XSIZE;
+
+	const int kp = (k < XSIZE) ? k : k - ZSIZE;
+	const int ip = (i < XSIZE) ? i : i - YSIZE;
+    const int jp = j;
+    
+    if (kp * kp + ip * ip + jp * jp < max_r2) {
+        const __COMPLEX_T t = Fconv[id];
+        RFLOAT w = XMIPP_MAX(1e-6, sqrt(t.x*t.x+t.y*t.y));
+        Fnewweight[id] /= w;
+    }
+
+}
+
+__global__ void divFconvKernel_ysplit(__COMPLEX_T * __restrict__ Fconv, double* Fnewweight, int max_r2, int XYZSIZE, int XZSIZE, int XSIZE, int YSIZE, int ZSIZE, int ystart) {
+    const unsigned int tid = threadIdx.x;
+    const unsigned int bid = blockIdx.x;
+    const unsigned int id = tid+bid*BLOCK_SIZE;
+
+    if(id>=XYZSIZE) return ;
+
+    const unsigned int i = id / XZSIZE + ystart;
+    const unsigned int j =(id / ZSIZE)%XSIZE;
+    const unsigned int k = id % ZSIZE;
 
 	const int kp = (k < XSIZE) ? k : k - ZSIZE;
 	const int ip = (i < XSIZE) ? i : i - YSIZE;

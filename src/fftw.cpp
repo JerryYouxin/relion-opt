@@ -217,16 +217,16 @@ void FourierTransformer::setReal(MultidimArray<RFLOAT> &input)
         pthread_mutex_lock(&fftw_plan_mutex);
 #ifdef RELION_SINGLE_PRECISION
         fPlanForward = fftwf_plan_dft_r2c(ndim, N, MULTIDIM_ARRAY(*fReal),
-                                         (fftwf_complex*) MULTIDIM_ARRAY(fFourier), FFTW_ESTIMATE);
+                                         (fftwf_complex*) MULTIDIM_ARRAY(fFourier), FFTW_ESTIMATE|FFTW_DESTROY_INPUT|FFTW_PATIENT);
         fPlanBackward = fftwf_plan_dft_c2r(ndim, N,
                                           (fftwf_complex*) MULTIDIM_ARRAY(fFourier), MULTIDIM_ARRAY(*fReal),
-                                          FFTW_ESTIMATE);
+                                          FFTW_ESTIMATE|FFTW_DESTROY_INPUT|FFTW_PATIENT);
 #else
         fPlanForward = fftw_plan_dft_r2c(ndim, N, MULTIDIM_ARRAY(*fReal),
-                                         (fftw_complex*) MULTIDIM_ARRAY(fFourier), FFTW_ESTIMATE);
+                                         (fftw_complex*) MULTIDIM_ARRAY(fFourier), FFTW_ESTIMATE|FFTW_DESTROY_INPUT|FFTW_PATIENT);
         fPlanBackward = fftw_plan_dft_c2r(ndim, N,
                                           (fftw_complex*) MULTIDIM_ARRAY(fFourier), MULTIDIM_ARRAY(*fReal),
-                                          FFTW_ESTIMATE);
+                                          FFTW_ESTIMATE|FFTW_DESTROY_INPUT|FFTW_PATIENT);
 #endif
         pthread_mutex_unlock(&fftw_plan_mutex);
 

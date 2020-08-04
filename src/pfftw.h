@@ -52,7 +52,8 @@ public:
 
     int local_fsize;
 
-    std::ptrdiff_t alloc_local, local_n0, local_0_start; //, local_n1, local_1_start;
+    std::ptrdiff_t alloc_local, local_n0, local_0_start, local_n1, local_1_start;
+    bool transposed_fourier;
     int *dLocInfo;
 
 #ifdef RELION_SINGLE_PRECISION
@@ -90,7 +91,7 @@ public:
 
     void cleanup();
     
-    void setSize(int nx, int ny, int nz);
+    void setSize(int nx, int ny, int nz, bool _transposed_fourier=false);
 
     void setReal(MultidimArray<RFLOAT> &img);
 

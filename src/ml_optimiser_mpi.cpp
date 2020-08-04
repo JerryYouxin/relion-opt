@@ -976,7 +976,7 @@ void MlOptimiserMpi::expectation()
 
 			free = (float) free / (float)cudaDeviceShares[i];
 #ifndef USE_ORI_GPUMEM_ASSUMPTION
-			free = free * mps;
+			free *= 4;
 			size_t required_free = requested_free_gpu_memory + GPU_THREAD_MEMORY_OVERHEAD_MB*1000*1000;
 #else
 			size_t required_free = requested_free_gpu_memory + GPU_THREAD_MEMORY_OVERHEAD_MB*1000*1000*threadcountOnDevice[i];
@@ -1977,7 +1977,7 @@ void MlOptimiserMpi::maximization()
 							tau2_fudge = mymodel.tau2_fudge_factor;
 						}
 #ifdef TIMING
-#if defined(CUDA) && !defined(FORCE_USE_ORI_RECONS) && !defined(FORCE_USE_CPU_RECONS)
+#if defined(CUDA) && !defined(FORCE_USE_CPU_RECONS)
 						if(do_gpu && (wsum_model.BPref[ith_recons]).ref_dim==3)
 							(wsum_model.BPref[ith_recons]).reconstruct_gpu(node->rank,mymodel.Iref[ith_recons], gridding_nr_iter, do_map,
 									tau2_fudge, mymodel.tau2_class[ith_recons], mymodel.sigma2_class[ith_recons],
@@ -1993,7 +1993,7 @@ void MlOptimiserMpi::maximization()
 								do_split_random_halves, (do_join_random_halves || do_always_join_random_halves), nr_threads, minres_map, &timer);
 #endif
 #else
-#if define(CUDA) && !defined(FORCE_USE_ORI_RECONS) && !defined(FORCE_USE_CPU_RECONS)
+#if define(CUDA) && !defined(FORCE_USE_CPU_RECONS)
 						if(do_gpu && (wsum_model.BPref[ith_recons]).ref_dim==3)
 							(wsum_model.BPref[ith_recons]).reconstruct_gpu(node->rank,mymodel.Iref[ith_recons], gridding_nr_iter, do_map,
 									tau2_fudge, mymodel.tau2_class[ith_recons], mymodel.sigma2_class[ith_recons],
@@ -2135,7 +2135,7 @@ void MlOptimiserMpi::maximization()
 							{
 								tau2_fudge = mymodel.tau2_fudge_factor;
 							}
-#if defined(CUDA) && !defined(FORCE_USE_ORI_RECONS) && !defined(FORCE_USE_CPU_RECONS)
+#if defined(CUDA) && !defined(FORCE_USE_CPU_RECONS)
 							if(do_gpu && (wsum_model.BPref[ith_recons]).ref_dim==3)
 								(wsum_model.BPref[ith_recons]).reconstruct_gpu(node->rank, 
 										mymodel.Iref[ith_recons], gridding_nr_iter, do_map,
@@ -2825,7 +2825,7 @@ void MlOptimiserMpi::readTemporaryDataAndWeightArraysAndReconstruct(int iclass, 
 	{
 		A3D_ELEM(wsum_model.BPref[iclass].weight, k, i, j) = A3D_ELEM(Itmp(), k, i, j);
 	}
-#if defined(CUDA) && !defined(FORCE_USE_ORI_RECONS) && !defined(FORCE_USE_CPU_RECONS)
+#if defined(CUDA) && !defined(FORCE_USE_CPU_RECONS)
 	if(do_gpu && wsum_model.BPref[iclass].ref_dim==3)
 		wsum_model.BPref[iclass].reconstruct_gpu(node->rank,Iunreg(), gridding_nr_iter, false, 1., dummy, dummy, dummy, dummy, dummy, 1., false, true, nr_threads, -1);
 	else

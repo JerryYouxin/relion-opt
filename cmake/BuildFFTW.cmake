@@ -8,14 +8,18 @@ endif()
 if(DoublePrec_CPU)
     # set fftw lib to use double precision
     set(libfft "fftw3")
-    set(ext_conf_flags_fft --enable-shared --prefix=${FFTW_EXTERNAL_PATH})
+    set(libfft_mpi "fftw3_mpi")
+    set(libfft_thread "fftw3_threads")
+    set(ext_conf_flags_fft --enable-threads --enable-mpi --enable-shared --prefix=${FFTW_EXTERNAL_PATH})
     if(TARGET_X86)
         set(ext_conf_flags_fft ${ext_conf_flags_fft} --enable-sse2 --enable-avx)
     endif()
 else(DoublePrec_CPU)
     # set fftw lib to use single precision
     set(libfft "fftw3f")
-    set(ext_conf_flags_fft --enable-shared --enable-float --prefix=${FFTW_EXTERNAL_PATH})
+    set(libfft "fftw3f")
+    set(libfft_mpi "fftw3f_mpi")
+    set(ext_conf_flags_fft --enable-threads --enable-mpi --enable-shared --enable-float --prefix=${FFTW_EXTERNAL_PATH})
     if(TARGET_X86)
         set(ext_conf_flags_fft ${ext_conf_flags_fft} --enable-sse --enable-avx)
     endif()
@@ -24,7 +28,12 @@ endif(DoublePrec_CPU)
 ## ------------------------------------------------------------- PREVIOUS EXT LIBS? --
 
 find_path(FFTW_INCLUDES     NAMES fftw3.h         PATHS ${FFTW_EXTERNAL_PATH}/include NO_DEFAULT_PATH) 
-find_library(FFTW_LIBRARIES NAMES ${libfft}       PATHS ${FFTW_EXTERNAL_PATH}/lib     NO_DEFAULT_PATH)
+#find_library(FFTW_LIBRARIES NAMES ${libfft}       PATHS ${FFTW_EXTERNAL_PATH}/lib     NO_DEFAULT_PATH)
+find_library(FFTW_SEQ_LIBRARIES  NAMES ${libfft} PATHS ${FFTW_EXTERNAL_PATH}/lib     NO_DEFAULT_PATH) 
+find_library(FFTW_MPI_LIBRARIES  NAMES ${libfft_mpi} PATHS ${FFTW_EXTERNAL_PATH}/lib     NO_DEFAULT_PATH)
+find_library(FFTW_THREAD_LIBRARIES  NAMES ${libfft_thread} PATHS ${FFTW_EXTERNAL_PATH}/lib     NO_DEFAULT_PATH)
+
+set(FFTW_LIBRARIES ${FFTW_SEQ_LIBRARIES} ${FFTW_MPI_LIBRARIES} ${FFTW_THREAD_LIBRARIES})
 
 if(FFTW_INCLUDES AND FFTW_LIBRARIES)
     set(FFTW_FOUND TRUE)
@@ -44,7 +53,7 @@ endif()
 
 if(NOT FFTW_FOUND)
 
-    set(FFTW_LIBRARIES ${FFTW_EXTERNAL_PATH}/lib/${CMAKE_SHARED_LIBRARY_PREFIX}${libfft}${CMAKE_SHARED_LIBRARY_SUFFIX})
+    set(FFTW_LIBRARIES ${FFTW_EXTERNAL_PATH}/lib/${CMAKE_SHARED_LIBRARY_PREFIX}${libfft}${CMAKE_SHARED_LIBRARY_SUFFIX} ${FFTW_EXTERNAL_PATH}/lib/${CMAKE_SHARED_LIBRARY_PREFIX}${libfft_mpi}${CMAKE_SHARED_LIBRARY_SUFFIX} ${FFTW_EXTERNAL_PATH}/lib/${CMAKE_SHARED_LIBRARY_PREFIX}${libfft_thread}${CMAKE_SHARED_LIBRARY_SUFFIX})
     set(FFTW_PATH      "${FFTW_EXTERNAL_PATH}" )
     set(FFTW_INCLUDES  "${FFTW_EXTERNAL_PATH}/include" )
 

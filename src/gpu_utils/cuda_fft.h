@@ -468,7 +468,6 @@ public:
 			fouriers.free_device_if_set();
 			clearPlan();
 		}
-		free_all();
 	}
 
 	void free_all()

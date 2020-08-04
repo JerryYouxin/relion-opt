@@ -54,24 +54,6 @@ public:
                      bool printTimes= false);
     void convoluteBlobRealSpace(DistributedFourierTransformer& transformer, bool do_mask = false);
     void windowToOridimRealSpace(DistributedFourierTransformer &transformer, MultidimArray<RFLOAT> &Mout, int nr_threads = 1, bool printTimes = false);
-#ifdef CUDA
-    void reconstruct_gpu(int rank,
-					 MultidimArray<RFLOAT> &vol_out,
-                     int max_iter_preweight,
-                     bool do_map,
-                     RFLOAT tau2_fudge,
-                     MultidimArray<RFLOAT> &tau2,
-                     MultidimArray<RFLOAT> &sigma2,
-                     MultidimArray<RFLOAT> &evidence_vs_prior,
-                     MultidimArray<RFLOAT> &fourier_coverage,
-                     MultidimArray<RFLOAT> fsc,
-                     RFLOAT normalise = 1.,
-                     bool update_tau2_with_fsc = false,
-                     bool is_whole_instead_of_half = false,
-                     int nr_threads = 1,
-                     int minres_map = -1,
-                     bool printTimes= false);
-#endif
 };
 
 #endif
